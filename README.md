@@ -2,6 +2,16 @@
 
 一个原生 `macOS` 状态栏应用（Menu Bar App），用于轮询接口并显示余额信息。
 
+## 应用展示
+
+<p align="center">
+  <img src="images/yls_logo.png" alt="伊莉丝Codex账户监控助手 Logo" width="120" />
+</p>
+
+<p align="center">
+  <img src="images/jt.png" alt="伊莉丝Codex账户监控助手运行截图" width="320" />
+</p>
+
 ## 功能
 
 - 每隔 N 秒轮询接口（可配置）
