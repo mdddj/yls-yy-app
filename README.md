@@ -54,7 +54,7 @@ swift run
 
 仓库已包含两个 GitHub Actions 工作流：
 
-- `.github/workflows/ci.yml`：在 `main` 和 PR 上执行 `swift build`
+- `.github/workflows/ci.yml`：在推送 `v*` tag 时执行 `swift build`
 - `.github/workflows/release-macos-app.yml`：在推送 `v*` tag 时自动构建 `.app` 并发布到 GitHub Release
 
 ### 发布流程

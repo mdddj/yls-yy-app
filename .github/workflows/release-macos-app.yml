@@ -1,7 +1,6 @@
 name: Build And Release macOS App
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -30,7 +29,6 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.zip
