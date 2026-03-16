@@ -24,12 +24,14 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-app-zip
-          path: dist/*.zip
+          name: macos-app-bundle-and-dmg
+          path: |
+            dist/*.app
+            dist/*.dmg
           if-no-files-found: error
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.zip
+          files: dist/*.dmg
           generate_release_notes: true

@@ -68,8 +68,8 @@ git push origin v0.1.0
 ```
 
 3. Actions 会自动生成可下载文件：
-   - Release Assets：`伊莉丝Codex账户监控助手.zip`
-   - Workflow Artifacts：`macos-app-zip`
+   - Release Assets：`伊莉丝Codex账户监控助手.dmg`
+   - Workflow Artifacts：`macos-app-bundle-and-dmg`（包含 `.app` 与 `.dmg`）
 
 ## 本地打包
 
@@ -80,4 +80,4 @@ scripts/build_macos_app.sh
 输出在 `dist/` 目录：
 
 - `伊莉丝Codex账户监控助手.app`
-- `伊莉丝Codex账户监控助手.zip`
+- `伊莉丝Codex账户监控助手.dmg`
