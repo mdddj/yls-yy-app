@@ -4,10 +4,53 @@ import Foundation
 private enum DefaultsKey {
     static let apiKey = "api_key"
     static let interval = "poll_interval_seconds"
+    static let displayStyle = "status_display_style"
 }
 
 private enum AppMeta {
     static let displayName = "伊莉丝Codex账户监控助手"
+    static let dashboardURL = "https://code.ylsagi.com/user/dashboard"
+    static let stackedStatusMinWidth: CGFloat = 44
+    static let stackedStatusMaxWidth: CGFloat = 72
+    static let stackedHorizontalPadding: CGFloat = 4
+    static let stackedStatusHeight: CGFloat = 18
+    static let stackedLineGap: CGFloat = 1
+    static let stackedVerticalNudge: CGFloat = -0.5
+    static let stackedTopFontSize: CGFloat = 9.5
+    static let stackedBottomFontSize: CGFloat = 7.5
+    static let circleMinWidth: CGFloat = 44
+    static let circleMaxWidth: CGFloat = 76
+    static let circleHorizontalPadding: CGFloat = 4
+    static let circleBottomFontSize: CGFloat = 8
+    static let circleLineGap: CGFloat = 1
+    static let circleLineWidth: CGFloat = 1.8
+    static let circleDiameter: CGFloat = 13
+}
+
+private enum StatusDisplayStyle: Int, CaseIterable {
+    case remaining = 0
+    case usedPercent
+    case remainingPercent
+    case stackedUsedPercent
+    case stackedRemainingPercent
+    case circleProgress
+
+    var title: String {
+        switch self {
+        case .remaining:
+            return "样式1: 余:xx.xx（默认）"
+        case .usedPercent:
+            return "样式2: 用:xx.xx%"
+        case .remainingPercent:
+            return "样式3: 剩:xx.xx%"
+        case .stackedUsedPercent:
+            return "样式4: 上下-上用量% 下已使用"
+        case .stackedRemainingPercent:
+            return "样式5: 上下-上剩余% 下剩余"
+        case .circleProgress:
+            return "样式6: 上圆圈 下余量"
+        }
+    }
 }
 
 private struct APIEnvelope: Decodable {
@@ -128,6 +171,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var timer: Timer?
     private var apiKey: String = ""
     private var pollInterval: TimeInterval = 5
+    private var displayStyle: StatusDisplayStyle = .remaining
+    private var displayStyleMenuItems: [StatusDisplayStyle: NSMenuItem] = [:]
+    private var statusFallbackText = "余额: --"
+    private var latestUsage = "--"
+    private var latestRemaining = "--"
+    private var latestUsedPercent: Double?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -149,21 +198,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         if interval >= 1 {
             pollInterval = interval
         }
+        let rawStyle = defaults.integer(forKey: DefaultsKey.displayStyle)
+        displayStyle = StatusDisplayStyle(rawValue: rawStyle) ?? .remaining
     }
 
     private func saveConfiguration() {
         let defaults = UserDefaults.standard
         defaults.set(apiKey, forKey: DefaultsKey.apiKey)
         defaults.set(pollInterval, forKey: DefaultsKey.interval)
+        defaults.set(displayStyle.rawValue, forKey: DefaultsKey.displayStyle)
     }
 
     private func setupStatusButton() {
-        guard let button = statusItem.button else { return }
         if apiKey.isEmpty {
-            button.title = "余额: 未配置Key"
+            statusFallbackText = "余额: 未配置Key"
         } else {
-            button.title = "余额: 加载中..."
+            statusFallbackText = "余额: 加载中..."
         }
+        renderStatusBar()
     }
 
     private func setupMenu() {
@@ -197,6 +249,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         let intervalItem = NSMenuItem(title: "设置轮询间隔...", action: #selector(handleSetInterval), keyEquivalent: "i")
         intervalItem.target = self
         menu.addItem(intervalItem)
+
+        let openDashboardItem = NSMenuItem(title: "打开伊莉丝控制台", action: #selector(handleOpenDashboard), keyEquivalent: "d")
+        openDashboardItem.target = self
+        menu.addItem(openDashboardItem)
+
+        let styleItem = NSMenuItem(title: "状态栏样式", action: nil, keyEquivalent: "")
+        let styleSubmenu = NSMenu(title: "状态栏样式")
+        for style in StatusDisplayStyle.allCases {
+            let item = NSMenuItem(title: style.title, action: #selector(handleSelectDisplayStyle(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = style.rawValue
+            styleSubmenu.addItem(item)
+            displayStyleMenuItems[style] = item
+        }
+        styleItem.submenu = styleSubmenu
+        menu.addItem(styleItem)
+        updateDisplayStyleMenuState()
 
         menu.addItem(NSMenuItem.separator())
         let quitItem = NSMenuItem(title: "退出", action: #selector(handleQuit), keyEquivalent: "q")
@@ -266,6 +335,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         saveConfiguration()
         startPolling()
         refreshNow()
+    }
+
+    @objc private func handleOpenDashboard() {
+        guard let url = URL(string: AppMeta.dashboardURL) else {
+            showError("控制台链接无效")
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func handleSelectDisplayStyle(_ sender: NSMenuItem) {
+        guard let style = StatusDisplayStyle(rawValue: sender.tag) else { return }
+        displayStyle = style
+        saveConfiguration()
+        updateDisplayStyleMenuState()
+        renderStatusBar()
     }
 
     @objc private func handleQuit() {
@@ -396,7 +481,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     }
 
     private func updateStatusBar(text: String) {
-        statusItem.button?.title = text
+        statusFallbackText = text
+        renderStatusBar()
     }
 
     private func updateMenu(
@@ -406,6 +492,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         usedPercent: Double?,
         maskedEmail: String?
     ) {
+        latestUsage = usage
+        latestRemaining = remaining
+        latestUsedPercent = usedPercent
+
         emailMenuItem.title = "用户邮箱: \(maskedEmail ?? "--")"
         usageMenuItem.title = "套餐用量(已用): \(usage)"
         remainingMenuItem.title = "剩余额度: \(remaining)"
@@ -418,6 +508,257 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             progressIndicator.doubleValue = 0
         }
         lastUpdateMenuItem.title = message
+        renderStatusBar()
+    }
+
+    private func updateDisplayStyleMenuState() {
+        for style in StatusDisplayStyle.allCases {
+            displayStyleMenuItems[style]?.state = (style == displayStyle) ? .on : .off
+        }
+    }
+
+    private func renderStatusBar() {
+        guard let button = statusItem.button else { return }
+        button.image = nil
+        button.imagePosition = .noImage
+
+        // 当接口数据不可用时，优先展示错误/未配置等状态文案。
+        guard latestRemaining != "--" else {
+            applySingleLineTitle(statusFallbackText)
+            return
+        }
+
+        let clampedUsed = latestUsedPercent.map { max(0, min(100, $0)) }
+        let remainingPercent = clampedUsed.map { max(0, 100 - $0) }
+
+        switch displayStyle {
+        case .remaining:
+            applySingleLineTitle("余: \(latestRemaining)")
+        case .usedPercent:
+            if let clampedUsed {
+                applySingleLineTitle(String(format: "用: %.2f%%", clampedUsed))
+            } else {
+                applySingleLineTitle("用: \(latestUsage)")
+            }
+        case .remainingPercent:
+            if let remainingPercent {
+                applySingleLineTitle(String(format: "剩: %.2f%%", remainingPercent))
+            } else {
+                applySingleLineTitle("剩: --")
+            }
+        case .stackedUsedPercent:
+            let top = clampedUsed.map { String(format: "%.2f%%", $0) } ?? "--"
+            applyTwoLineImage(top: top, bottom: "已使用")
+        case .stackedRemainingPercent:
+            let top = remainingPercent.map { String(format: "%.2f%%", $0) } ?? "--"
+            applyTwoLineImage(top: top, bottom: "剩余")
+        case .circleProgress:
+            applyCircleProgressWithRemaining(progress: clampedUsed.map { $0 / 100 }, remainingText: "余: \(latestRemaining)")
+        }
+    }
+
+    private func applySingleLineTitle(_ text: String, size: CGFloat = 12) {
+        guard let button = statusItem.button else { return }
+        statusItem.length = NSStatusItem.variableLength
+        button.alignment = .center
+        button.cell?.wraps = false
+        button.cell?.lineBreakMode = .byClipping
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: size, weight: .semibold),
+            .foregroundColor: NSColor.labelColor
+        ]
+        button.attributedTitle = NSAttributedString(string: text, attributes: attrs)
+    }
+
+    private func applyTwoLineTitle(top: String, bottom: String) {
+        guard let button = statusItem.button else { return }
+        statusItem.length = AppMeta.stackedStatusMinWidth
+        button.alignment = .center
+        button.cell?.wraps = true
+        button.cell?.lineBreakMode = .byClipping
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byClipping
+
+        let combined = NSMutableAttributedString(
+            string: "\(top)\n",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: paragraph
+            ]
+        )
+        combined.append(
+            NSAttributedString(
+                string: bottom,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: 9, weight: .regular),
+                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .paragraphStyle: paragraph
+                ]
+            )
+        )
+        button.attributedTitle = combined
+    }
+
+    private func applyTwoLineImage(top: String, bottom: String) {
+        guard let button = statusItem.button else { return }
+        let targetWidth = makeStackedTargetWidth(top: top, bottom: bottom)
+        statusItem.length = targetWidth
+        button.attributedTitle = NSAttributedString(string: "")
+        let targetHeight = max(AppMeta.stackedStatusHeight, floor(button.bounds.height))
+        button.image = makeStackedTextImage(top: top, bottom: bottom, targetWidth: targetWidth, targetHeight: targetHeight)
+        button.imagePosition = .imageOnly
+    }
+
+    private func makeStackedTargetWidth(top: String, bottom: String) -> CGFloat {
+        let topFont = NSFont.systemFont(ofSize: AppMeta.stackedTopFontSize, weight: .semibold)
+        let bottomFont = NSFont.systemFont(ofSize: AppMeta.stackedBottomFontSize, weight: .medium)
+        let topWidth = ceil((top as NSString).size(withAttributes: [.font: topFont]).width)
+        let bottomWidth = ceil((bottom as NSString).size(withAttributes: [.font: bottomFont]).width)
+        let contentWidth = max(topWidth, bottomWidth)
+        let target = contentWidth + AppMeta.stackedHorizontalPadding * 2
+        return max(AppMeta.stackedStatusMinWidth, min(AppMeta.stackedStatusMaxWidth, target))
+    }
+
+    private func makeStackedTextImage(top: String, bottom: String, targetWidth: CGFloat, targetHeight: CGFloat) -> NSImage {
+        let size = NSSize(width: targetWidth, height: targetHeight)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSGraphicsContext.current?.shouldAntialias = true
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byClipping
+
+        let topFont = NSFont.systemFont(ofSize: AppMeta.stackedTopFontSize, weight: .semibold)
+        let bottomFont = NSFont.systemFont(ofSize: AppMeta.stackedBottomFontSize, weight: .medium)
+
+        let topAttrs: [NSAttributedString.Key: Any] = [
+            .font: topFont,
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph
+        ]
+        let bottomAttrs: [NSAttributedString.Key: Any] = [
+            .font: bottomFont,
+            .foregroundColor: NSColor.labelColor.withAlphaComponent(0.68),
+            .paragraphStyle: paragraph
+        ]
+
+        let topText = NSAttributedString(string: top, attributes: topAttrs)
+        let bottomText = NSAttributedString(string: bottom, attributes: bottomAttrs)
+        let topHeight = ceil(topFont.ascender - topFont.descender)
+        let bottomHeight = ceil(bottomFont.ascender - bottomFont.descender)
+        let contentHeight = topHeight + AppMeta.stackedLineGap + bottomHeight
+        let baseY = floor((size.height - contentHeight) / 2 + AppMeta.stackedVerticalNudge)
+
+        let bottomY = baseY
+        let topY = bottomY + bottomHeight + AppMeta.stackedLineGap
+
+        topText.draw(in: NSRect(x: 0, y: topY, width: size.width, height: topHeight))
+        bottomText.draw(in: NSRect(x: 0, y: bottomY, width: size.width, height: bottomHeight))
+
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
+    private func applyCircleProgressWithRemaining(progress: Double?, remainingText: String) {
+        guard let button = statusItem.button else { return }
+        let targetWidth = makeCircleTargetWidth(bottomText: remainingText)
+        statusItem.length = targetWidth
+        button.attributedTitle = NSAttributedString(string: "")
+        let targetHeight = max(AppMeta.stackedStatusHeight, floor(button.bounds.height))
+        button.image = makeCircleWithBottomTextImage(
+            progress: progress ?? 0,
+            bottomText: remainingText,
+            targetWidth: targetWidth,
+            targetHeight: targetHeight
+        )
+        button.imagePosition = .imageOnly
+    }
+
+    private func makeCircleTargetWidth(bottomText: String) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: AppMeta.circleBottomFontSize, weight: .medium)
+        let textWidth = ceil((bottomText as NSString).size(withAttributes: [.font: font]).width)
+        let contentWidth = max(AppMeta.circleDiameter, textWidth)
+        let target = contentWidth + AppMeta.circleHorizontalPadding * 2
+        return max(AppMeta.circleMinWidth, min(AppMeta.circleMaxWidth, target))
+    }
+
+    private func makeCircleWithBottomTextImage(progress: Double, bottomText: String, targetWidth: CGFloat, targetHeight: CGFloat) -> NSImage {
+        let size = NSSize(width: targetWidth, height: targetHeight)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSGraphicsContext.current?.shouldAntialias = true
+
+        let clamped = max(0, min(1, progress))
+        let bottomFont = NSFont.systemFont(ofSize: AppMeta.circleBottomFontSize, weight: .medium)
+        let textHeight = ceil(bottomFont.ascender - bottomFont.descender)
+        let circleSize = AppMeta.circleDiameter
+        let contentHeight = circleSize + AppMeta.circleLineGap + textHeight
+        let baseY = floor((size.height - contentHeight) / 2 + AppMeta.stackedVerticalNudge)
+        let textY = baseY
+        let circleY = textY + textHeight + AppMeta.circleLineGap
+        let center = NSPoint(x: floor(size.width / 2), y: circleY + circleSize / 2)
+        let radius = AppMeta.circleDiameter / 2
+        let startAngle: CGFloat = 90
+        let endAngle = startAngle - CGFloat(clamped * 360)
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byClipping
+        NSAttributedString(
+            string: bottomText,
+            attributes: [
+                .font: bottomFont,
+                .foregroundColor: NSColor.labelColor.withAlphaComponent(0.68),
+                .paragraphStyle: paragraph
+            ]
+        ).draw(in: NSRect(x: 0, y: textY, width: size.width, height: textHeight))
+
+        let bgPath = NSBezierPath()
+        bgPath.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
+        bgPath.lineWidth = AppMeta.circleLineWidth
+        NSColor.tertiaryLabelColor.setStroke()
+        bgPath.stroke()
+
+        let fgPath = NSBezierPath()
+        fgPath.appendArc(withCenter: center, radius: radius, startAngle: startAngle, endAngle: endAngle, clockwise: true)
+        fgPath.lineWidth = AppMeta.circleLineWidth
+        NSColor.systemGreen.setStroke()
+        fgPath.stroke()
+
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
+    private func makeCircularProgressImage(progress: Double) -> NSImage {
+        let size = NSSize(width: 14, height: 14)
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        let center = NSPoint(x: size.width / 2, y: size.height / 2)
+        let radius = min(size.width, size.height) / 2 - 1.5
+        let startAngle: CGFloat = 90
+        let endAngle = startAngle - CGFloat(max(0, min(1, progress)) * 360)
+
+        let bgPath = NSBezierPath()
+        bgPath.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
+        bgPath.lineWidth = 2
+        NSColor.tertiaryLabelColor.setStroke()
+        bgPath.stroke()
+
+        let fgPath = NSBezierPath()
+        fgPath.appendArc(withCenter: center, radius: radius, startAngle: startAngle, endAngle: endAngle, clockwise: true)
+        fgPath.lineWidth = 2
+        NSColor.systemGreen.setStroke()
+        fgPath.stroke()
+
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
     }
 
     nonisolated private static func resolveUsedPercentage(usage: UsagePayload?, remaining: FlexibleNumber) -> Double? {
