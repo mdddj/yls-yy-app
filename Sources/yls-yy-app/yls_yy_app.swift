@@ -1478,14 +1478,15 @@ private final class MCPHTTPServer: @unchecked Sendable {
     }
 
     private func makeRawJSONResponse(_ body: Data, status: String = "200 OK") -> Data {
-        let header = """
-HTTP/1.1 \(status)\r
-Content-Type: application/json; charset=utf-8\r
-Access-Control-Allow-Origin: *\r
-Content-Length: \(body.count)\r
-Connection: close\r
-\r
-"""
+        let header = [
+            "HTTP/1.1 \(status)",
+            "Content-Type: application/json; charset=utf-8",
+            "Access-Control-Allow-Origin: *",
+            "Content-Length: \(body.count)",
+            "Connection: close",
+            "",
+            ""
+        ].joined(separator: "\r\n")
         var data = Data(header.utf8)
         data.append(body)
         return data
