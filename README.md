@@ -62,6 +62,7 @@ swift run
 - `GET /health`
 - `GET /snapshot`
 - `GET /mcp/snapshot`
+- `POST /mcp`（JSON-RPC / MCP 风格接口）
 
 示例：
 
@@ -78,6 +79,34 @@ curl http://127.0.0.1:8765/mcp/snapshot
 - 套餐摘要
 - 当前轮询间隔
 - 当前显示样式
+
+### MCP JSON-RPC 能力
+
+目前已支持这些常用方法：
+
+- `initialize`
+- `tools/list`
+- `tools/call`
+- `resources/list`
+- `resources/read`
+
+内置对象：
+
+- Tool: `get_codex_monitor_snapshot`
+- Resource: `yls://codex-monitor/snapshot`
+
+示例：
+
+```bash
+curl -X POST http://127.0.0.1:8765/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {"name": "get_codex_monitor_snapshot"}
+  }'
+```
 
 ## CI/CD 自动打包发布
 

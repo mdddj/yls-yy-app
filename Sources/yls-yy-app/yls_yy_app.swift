@@ -1254,6 +1254,8 @@ private struct MCPPackageItem: Encodable {
 
 private final class MCPHTTPServer: @unchecked Sendable {
     private let stateProvider: @Sendable () -> Data
+    private let resourceURI = "yls://codex-monitor/snapshot"
+    private let toolName = "get_codex_monitor_snapshot"
     private let queue = DispatchQueue(label: "com.yls.codex-monitor.mcp-server")
     private var listener: NWListener?
     private(set) var port: UInt16
@@ -1310,30 +1312,34 @@ private final class MCPHTTPServer: @unchecked Sendable {
 
     private func handle(connection: NWConnection) {
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
             guard let self else {
                 connection.cancel()
                 return
             }
             let requestText = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            let path = self.parsePath(from: requestText)
+            let request = self.parseHTTPRequest(from: requestText)
             let response: Data
 
-            switch path {
+            switch request.path {
             case "/", "/health":
                 response = self.makeJSONResponse([
                     "ok": true,
                     "service": "yls-codex-monitor-mcp",
                     "port": Int(self.port),
-                    "endpoints": ["/health", "/snapshot", "/mcp/snapshot"]
+                    "endpoints": ["/health", "/snapshot", "/mcp/snapshot", "/mcp"],
+                    "tool": self.toolName,
+                    "resource": self.resourceURI
                 ])
             case "/snapshot", "/mcp/snapshot":
                 response = self.makeRawJSONResponse(self.stateProvider())
+            case "/mcp":
+                response = self.handleMCPRequest(body: request.body)
             default:
                 response = self.makeJSONResponse([
                     "ok": false,
                     "error": "not_found",
-                    "path": path
+                    "path": request.path
                 ], status: "404 Not Found")
             }
 
@@ -1343,13 +1349,127 @@ private final class MCPHTTPServer: @unchecked Sendable {
         }
     }
 
-    private func parsePath(from request: String) -> String {
-        guard let firstLine = request.split(separator: "\n", omittingEmptySubsequences: false).first else {
-            return "/"
-        }
+    private func parseHTTPRequest(from request: String) -> (path: String, body: Data?) {
+        let normalized = request.replacingOccurrences(of: "\r\n", with: "\n")
+        let sections = normalized.components(separatedBy: "\n\n")
+        let header = sections.first ?? ""
+        let bodyString = sections.dropFirst().joined(separator: "\n\n")
+        let firstLine = header.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? ""
         let components = firstLine.split(separator: " ")
-        guard components.count >= 2 else { return "/" }
-        return String(components[1]).components(separatedBy: "?").first ?? "/"
+        let path = components.count >= 2 ? String(components[1]).components(separatedBy: "?").first ?? "/" : "/"
+        let body = bodyString.isEmpty ? nil : Data(bodyString.utf8)
+        return (path, body)
+    }
+
+    private func handleMCPRequest(body: Data?) -> Data {
+        guard let body,
+              let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            return makeJSONResponse([
+                "jsonrpc": "2.0",
+                "error": [
+                    "code": -32700,
+                    "message": "Parse error"
+                ],
+                "id": NSNull()
+            ])
+        }
+
+        let method = object["method"] as? String ?? ""
+        let id = object["id"] ?? NSNull()
+        let params = object["params"] as? [String: Any] ?? [:]
+        let snapshotString = String(data: stateProvider(), encoding: .utf8) ?? "{}"
+
+        let result: Any
+        switch method {
+        case "initialize":
+            result = [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [
+                    "tools": [:],
+                    "resources": [:]
+                ],
+                "serverInfo": [
+                    "name": "yls-codex-monitor-mcp",
+                    "version": "0.2.0"
+                ]
+            ]
+        case "notifications/initialized":
+            result = [:]
+        case "tools/list":
+            result = [
+                "tools": [[
+                    "name": toolName,
+                    "description": "获取伊莉丝 Codex 账户监控应用的最新本地快照数据",
+                    "inputSchema": [
+                        "type": "object",
+                        "properties": [:]
+                    ]
+                ]]
+            ]
+        case "tools/call":
+            let tool = params["name"] as? String ?? ""
+            if tool == toolName {
+                result = [
+                    "content": [[
+                        "type": "text",
+                        "text": snapshotString
+                    ]]
+                ]
+            } else {
+                return makeJSONResponse([
+                    "jsonrpc": "2.0",
+                    "error": [
+                        "code": -32601,
+                        "message": "Unknown tool: \(tool)"
+                    ],
+                    "id": id
+                ])
+            }
+        case "resources/list":
+            result = [
+                "resources": [[
+                    "uri": resourceURI,
+                    "name": "Codex Monitor Snapshot",
+                    "description": "伊莉丝 Codex 账户监控的最新本地快照",
+                    "mimeType": "application/json"
+                ]]
+            ]
+        case "resources/read":
+            let uri = params["uri"] as? String ?? ""
+            if uri == resourceURI {
+                result = [
+                    "contents": [[
+                        "uri": resourceURI,
+                        "mimeType": "application/json",
+                        "text": snapshotString
+                    ]]
+                ]
+            } else {
+                return makeJSONResponse([
+                    "jsonrpc": "2.0",
+                    "error": [
+                        "code": -32602,
+                        "message": "Unknown resource: \(uri)"
+                    ],
+                    "id": id
+                ])
+            }
+        default:
+            return makeJSONResponse([
+                "jsonrpc": "2.0",
+                "error": [
+                    "code": -32601,
+                    "message": "Method not found: \(method)"
+                ],
+                "id": id
+            ])
+        }
+
+        return makeJSONResponse([
+            "jsonrpc": "2.0",
+            "result": result,
+            "id": id
+        ])
     }
 
     private func makeJSONResponse(_ object: [String: Any], status: String = "200 OK") -> Data {
