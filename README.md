@@ -9,7 +9,8 @@
 </p>
 
 <p align="center">
-  <img src="images/jt.png" alt="伊莉丝Codex账户监控助手运行截图" width="320" />
+  <img src="images/截图亮色.png" alt="伊莉丝Codex账户监控助手亮色截图" width="320" />
+  <img src="images/截图暗色.png" alt="伊莉丝Codex账户监控助手暗色截图" width="320" />
 </p>
 
 ## 功能
