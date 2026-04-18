@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import QuartzCore
+import SwiftUI
 
 private enum DefaultsKey {
     static let apiKey = "api_key"
@@ -11,6 +11,7 @@ private enum DefaultsKey {
 private enum AppMeta {
     static let displayName = "伊莉丝Codex账户监控助手"
     static let dashboardURL = "https://code.ylsagi.com/user/dashboard"
+    static let pricingURL = "https://code.ylsagi.com/pricing"
     static let stackedStatusMinWidth: CGFloat = 44
     static let stackedStatusMaxWidth: CGFloat = 72
     static let stackedHorizontalPadding: CGFloat = 4
@@ -50,6 +51,80 @@ private enum StatusDisplayStyle: Int, CaseIterable {
             return "样式5: 上下-上剩余% 下剩余"
         case .circleProgress:
             return "样式6: 上圆圈 下余量"
+        }
+    }
+
+    var chipTitle: String {
+        switch self {
+        case .remaining:
+            return "余量"
+        case .usedPercent:
+            return "用量%"
+        case .remainingPercent:
+            return "剩余%"
+        case .stackedUsedPercent:
+            return "上下用"
+        case .stackedRemainingPercent:
+            return "上下剩"
+        case .circleProgress:
+            return "圆环"
+        }
+    }
+
+    var selectorSymbol: String {
+        switch self {
+        case .remaining:
+            return "text.alignleft"
+        case .usedPercent:
+            return "chart.bar.fill"
+        case .remainingPercent:
+            return "chart.bar.doc.horizontal"
+        case .stackedUsedPercent:
+            return "rectangle.split.2x1"
+        case .stackedRemainingPercent:
+            return "rectangle.split.2x1.fill"
+        case .circleProgress:
+            return "gauge.with.dots.needle.bottom.50percent"
+        }
+    }
+
+    var selectorPreview: String {
+        switch self {
+        case .remaining:
+            return "余: 90.47"
+        case .usedPercent:
+            return "用: 14.06%"
+        case .remainingPercent:
+            return "剩: 85.94%"
+        case .stackedUsedPercent:
+            return "14.06% / 已使用"
+        case .stackedRemainingPercent:
+            return "85.94% / 剩余"
+        case .circleProgress:
+            return "圆环 + 余量"
+        }
+    }
+}
+
+private enum MenuPanelMode {
+    case statistics
+    case settings
+
+    var toggleSymbol: String {
+        switch self {
+        case .statistics:
+            return "gearshape"
+        case .settings:
+            return "chart.bar.xaxis"
+        }
+    }
+
+    var toggleHint: String {
+        switch self {
+        case .statistics:
+            return "打开设置"
+        case .settings:
+            return "返回统计信息"
         }
     }
 }
@@ -219,9 +294,14 @@ private struct StatusSummaryViewModel {
     let packageSectionTitle: String?
     let packageItems: [SummaryPackageItem]
     let progressLabel: String
+    let progressPrefix: String?
     let progressValue: String
     let progress: Double?
     let footerText: String
+    let hasAPIKey: Bool
+    let pollIntervalText: String
+    let displayStyle: StatusDisplayStyle
+    let panelMode: MenuPanelMode
 }
 
 private struct SummaryPackageItem {
@@ -231,499 +311,867 @@ private struct SummaryPackageItem {
     let badgeTone: SummaryStatusTone
 }
 
-private func makeSymbolImage(_ name: String, pointSize: CGFloat, weight: NSFont.Weight) -> NSImage? {
-    let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
-    return NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-        .withSymbolConfiguration(configuration)
+private extension SummaryStatusTone {
+    var swiftUIColor: Color { Color(nsColor: textColor) }
+    var swiftUIFillColor: Color { Color(nsColor: fillColor) }
+    var swiftUIBorderColor: Color { Color(nsColor: borderColor) }
 }
 
-private final class SummaryMetricCardView: NSView {
-    private let captionLabel = NSTextField(labelWithString: "")
-    private let valueLabel = NSTextField(wrappingLabelWithString: "")
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.cornerRadius = 12
-        layer?.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.86).cgColor
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.28).cgColor
-
-        captionLabel.translatesAutoresizingMaskIntoConstraints = false
-        captionLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        captionLabel.textColor = .secondaryLabelColor
-
-        valueLabel.translatesAutoresizingMaskIntoConstraints = false
-        valueLabel.font = NSFont.systemFont(ofSize: 16, weight: .semibold)
-        valueLabel.textColor = .labelColor
-        valueLabel.maximumNumberOfLines = 2
-        valueLabel.lineBreakMode = .byTruncatingTail
-
-        addSubview(captionLabel)
-        addSubview(valueLabel)
-
-        NSLayoutConstraint.activate([
-            captionLabel.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            captionLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            captionLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-
-            valueLabel.topAnchor.constraint(equalTo: captionLabel.bottomAnchor, constant: 6),
-            valueLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            valueLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func apply(caption: String, value: String, valueFontSize: CGFloat = 16, valueWeight: NSFont.Weight = .semibold) {
-        captionLabel.stringValue = caption
-        valueLabel.stringValue = value
-        valueLabel.font = NSFont.systemFont(ofSize: valueFontSize, weight: valueWeight)
-    }
+private extension StatusSummaryViewModel {
+    static let placeholder = StatusSummaryViewModel(
+        title: AppMeta.displayName,
+        statusText: "等待中",
+        statusTone: .neutral,
+        emailText: "--",
+        canToggleEmail: false,
+        isEmailVisible: false,
+        usageLabel: "已用/总",
+        usageValue: "--",
+        remainingValue: "--",
+        renewalLabel: "最近到期",
+        renewalValue: "--",
+        packageSectionTitle: nil,
+        packageItems: [],
+        progressLabel: "本周用量进度",
+        progressPrefix: nil,
+        progressValue: "--",
+        progress: nil,
+        footerText: "等待数据",
+        hasAPIKey: false,
+        pollIntervalText: "--",
+        displayStyle: .remaining,
+        panelMode: .statistics
+    )
 }
 
-private final class SummaryInlineMetricView: NSView {
-    private let captionLabel = NSTextField(labelWithString: "")
-    private let valueLabel = NSTextField(labelWithString: "")
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-
-        captionLabel.translatesAutoresizingMaskIntoConstraints = false
-        captionLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        captionLabel.textColor = .secondaryLabelColor
-
-        valueLabel.translatesAutoresizingMaskIntoConstraints = false
-        valueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
-        valueLabel.textColor = .labelColor
-        valueLabel.lineBreakMode = .byTruncatingTail
-        valueLabel.maximumNumberOfLines = 1
-
-        addSubview(captionLabel)
-        addSubview(valueLabel)
-
-        NSLayoutConstraint.activate([
-            captionLabel.topAnchor.constraint(equalTo: topAnchor),
-            captionLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
-            captionLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            valueLabel.topAnchor.constraint(equalTo: captionLabel.bottomAnchor, constant: 4),
-            valueLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
-            valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-            valueLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func apply(caption: String, value: String, valueFont: NSFont? = nil) {
-        captionLabel.stringValue = caption
-        valueLabel.stringValue = value
-        if let valueFont {
-            valueLabel.font = valueFont
+private extension View {
+    @ViewBuilder
+    func liquidGlassCapsule() -> some View {
+        if #available(macOS 26.0, *) {
+            self
+                .background {
+                    Rectangle()
+                        .fill(.clear)
+                        .glassEffect(.regular, in: Capsule())
+                }
+                .overlay {
+                    Capsule().stroke(.quaternary, lineWidth: 0.8)
+                }
+        } else {
+            self
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay {
+                    Capsule().stroke(.quaternary, lineWidth: 0.8)
+                }
         }
     }
-}
 
-private final class SummaryPackageRowView: NSView {
-    private let accentView = NSView()
-    private let containerView = NSView()
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let subtitleLabel = NSTextField(labelWithString: "")
-    private let badgeContainer = NSView()
-    private let badgeLabel = NSTextField(labelWithString: "")
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-
-        accentView.translatesAutoresizingMaskIntoConstraints = false
-        accentView.wantsLayer = true
-        accentView.layer?.cornerRadius = 2
-        accentView.layer?.backgroundColor = NSColor.systemTeal.withAlphaComponent(0.72).cgColor
-
-        containerView.translatesAutoresizingMaskIntoConstraints = false
-        containerView.wantsLayer = true
-        containerView.layer?.cornerRadius = 12
-        containerView.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.74).cgColor
-        containerView.layer?.borderWidth = 1
-        containerView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.14).cgColor
-
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = .labelColor
-        titleLabel.lineBreakMode = .byTruncatingTail
-
-        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        subtitleLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        subtitleLabel.textColor = .secondaryLabelColor
-        subtitleLabel.lineBreakMode = .byTruncatingTail
-
-        badgeContainer.translatesAutoresizingMaskIntoConstraints = false
-        badgeContainer.wantsLayer = true
-        badgeContainer.layer?.cornerRadius = 999
-        badgeContainer.layer?.borderWidth = 1
-
-        badgeLabel.translatesAutoresizingMaskIntoConstraints = false
-        badgeLabel.font = NSFont.systemFont(ofSize: 10.5, weight: .semibold)
-        badgeContainer.addSubview(badgeLabel)
-
-        let titleSpacer = NSView()
-        titleSpacer.translatesAutoresizingMaskIntoConstraints = false
-        titleSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        let titleRow = NSStackView(views: [titleLabel, titleSpacer, badgeContainer])
-        titleRow.translatesAutoresizingMaskIntoConstraints = false
-        titleRow.orientation = .horizontal
-        titleRow.alignment = .centerY
-        titleRow.spacing = 8
-
-        containerView.addSubview(titleRow)
-        containerView.addSubview(subtitleLabel)
-        addSubview(containerView)
-        addSubview(accentView)
-
-        NSLayoutConstraint.activate([
-            accentView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            accentView.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            accentView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            accentView.widthAnchor.constraint(equalToConstant: 4),
-
-            containerView.topAnchor.constraint(equalTo: topAnchor),
-            containerView.leadingAnchor.constraint(equalTo: accentView.trailingAnchor, constant: 8),
-            containerView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            containerView.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            titleRow.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 10),
-            titleRow.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 12),
-            titleRow.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -12),
-
-            badgeLabel.topAnchor.constraint(equalTo: badgeContainer.topAnchor, constant: 4),
-            badgeLabel.leadingAnchor.constraint(equalTo: badgeContainer.leadingAnchor, constant: 8),
-            badgeLabel.trailingAnchor.constraint(equalTo: badgeContainer.trailingAnchor, constant: -8),
-            badgeLabel.bottomAnchor.constraint(equalTo: badgeContainer.bottomAnchor, constant: -4),
-
-            subtitleLabel.topAnchor.constraint(equalTo: titleRow.bottomAnchor, constant: 6),
-            subtitleLabel.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 12),
-            subtitleLabel.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -12),
-            subtitleLabel.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -10),
-        ])
+    @ViewBuilder
+    func compactSurface(cornerRadius: CGFloat, tint: Color = .clear) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        if #available(macOS 26.0, *) {
+            self
+                .background {
+                    ZStack {
+                        Rectangle()
+                            .fill(.clear)
+                            .glassEffect(.regular, in: shape)
+                        shape
+                            .fill(tint)
+                    }
+                }
+                .overlay {
+                    shape.stroke(.quaternary, lineWidth: 0.8)
+                }
+        } else {
+            self
+                .background {
+                    ZStack {
+                        shape
+                            .fill(.ultraThinMaterial)
+                        shape
+                            .fill(tint)
+                    }
+                }
+                .overlay {
+                    shape.stroke(.quaternary, lineWidth: 0.8)
+                }
+        }
     }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func apply(_ item: SummaryPackageItem) {
-        titleLabel.stringValue = item.title
-        subtitleLabel.stringValue = item.subtitle
-        badgeLabel.stringValue = item.badgeText
-        badgeLabel.textColor = item.badgeTone.textColor
-        badgeContainer.layer?.backgroundColor = item.badgeTone.fillColor.cgColor
-        badgeContainer.layer?.borderColor = item.badgeTone.borderColor.cgColor
-        accentView.layer?.backgroundColor = item.badgeTone.textColor.withAlphaComponent(0.72).cgColor
+    @ViewBuilder
+    func contentMaterialSurface(cornerRadius: CGFloat, tint: Color = .clear) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        self
+            .background {
+                ZStack {
+                    shape
+                        .fill(.regularMaterial)
+                    shape
+                        .fill(tint)
+                }
+            }
+            .overlay {
+                shape.stroke(.quaternary, lineWidth: 0.65)
+            }
     }
 }
 
-private final class SummaryProgressBarView: NSView {
-    var progress: Double? {
-        didSet { needsLayout = true }
+private struct MenuActionButton: View {
+    let title: String
+    let subtitle: String?
+    let systemImage: String
+    let shortcut: String?
+    let prominent: Bool
+    let action: (() -> Void)?
+    let useInfoCardBackground: Bool
+
+    @State private var isHovered = false
+
+    init(
+        title: String,
+        subtitle: String?,
+        systemImage: String,
+        shortcut: String?,
+        prominent: Bool,
+        action: (() -> Void)?,
+        useInfoCardBackground: Bool = false
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.systemImage = systemImage
+        self.shortcut = shortcut
+        self.prominent = prominent
+        self.action = action
+        self.useInfoCardBackground = useInfoCardBackground
     }
 
-    private let trackLayer = CALayer()
-    private let fillLayer = CAGradientLayer()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-        layer?.masksToBounds = false
-
-        trackLayer.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.34).cgColor
-        fillLayer.colors = [
-            NSColor.systemTeal.withAlphaComponent(0.95).cgColor,
-            NSColor.systemGreen.withAlphaComponent(0.95).cgColor
-        ]
-        fillLayer.startPoint = CGPoint(x: 0, y: 0.5)
-        fillLayer.endPoint = CGPoint(x: 1, y: 0.5)
-
-        layer?.addSublayer(trackLayer)
-        layer?.addSublayer(fillLayer)
+    private var compactTint: Color {
+        prominent
+            ? (isHovered ? .secondary.opacity(0.14) : .secondary.opacity(0.08))
+            : (isHovered ? .primary.opacity(0.10) : .primary.opacity(0.04))
     }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    @ViewBuilder
+    private func applySurface<Content: View>(to content: Content) -> some View {
+        if useInfoCardBackground {
+            content
+                .contentMaterialSurface(cornerRadius: 15)
+        } else {
+            content
+                .compactSurface(
+                    cornerRadius: 15,
+                    tint: compactTint
+                )
+        }
     }
 
-    override func layout() {
-        super.layout()
+    var body: some View {
+        Button(action: { action?() }) {
+            applySurface(
+                to: HStack(spacing: 10) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(prominent ? .primary : .secondary)
+                        .frame(width: 22, height: 22)
+                        .background(
+                            Circle()
+                                .fill(.thinMaterial)
+                        )
 
-        let bounds = self.bounds.insetBy(dx: 0.5, dy: 0.5)
-        trackLayer.frame = bounds
-        trackLayer.cornerRadius = bounds.height / 2
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(title)
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
 
-        guard let progress, progress > 0 else {
-            fillLayer.isHidden = true
+                        if let subtitle {
+                            Text(subtitle)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+
+                    Spacer(minLength: 8)
+
+                    if let shortcut {
+                        Text(shortcut)
+                            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            )
+            .overlay {
+                if prominent, !useInfoCardBackground {
+                    RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        .stroke(.tertiary, lineWidth: 1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct StyleChipButton: View {
+    let style: StatusDisplayStyle
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: style.selectorSymbol)
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(style.chipTitle)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                }
+                .foregroundStyle(isSelected ? .primary : .secondary)
+
+                Text(style.selectorPreview)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+            }
+            .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .contentMaterialSurface(
+                cornerRadius: 13,
+                tint: isSelected
+                    ? .secondary.opacity(0.16)
+                    : (isHovered ? .primary.opacity(0.08) : .clear)
+            )
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .stroke(.tertiary, lineWidth: 1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct LiquidGlassSummaryPanel: View {
+    let model: StatusSummaryViewModel
+    let onTogglePanelMode: (() -> Void)?
+    let onToggleEmail: (() -> Void)?
+    let onRefresh: (() -> Void)?
+    let onSetAPIKey: (() -> Void)?
+    let onSetInterval: (() -> Void)?
+    let onOpenDashboard: (() -> Void)?
+    let onOpenPricing: (() -> Void)?
+    let onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)?
+    let onQuit: (() -> Void)?
+
+    @Namespace private var glassNamespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            headerRow
+            if model.panelMode == .statistics {
+                statisticsPage
+            } else {
+                settingsPage
+            }
+        }
+        .padding(12)
+        .frame(width: StatusSummaryView.preferredWidth)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var statisticsPage: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            metaRow
+            contentPanel
+        }
+    }
+
+    private var settingsPage: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            settingsHeaderBanner
+            settingsActionPanel
+        }
+    }
+
+    private var settingsHeaderBanner: some View {
+        HStack(spacing: 10) {
+            Label("设置模式", systemImage: "slider.horizontal.3")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 6)
+
+            Text("点击右上角图标返回统计")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.92)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentMaterialSurface(
+            cornerRadius: 14,
+            tint: .secondary.opacity(0.12)
+        )
+    }
+
+    private var contentPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            heroPanel
+            packageSection
+            progressSection
+        }
+    }
+
+    private var headerRow: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text(model.title)
+                .font(.system(size: 15, weight: .heavy))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 6)
+
+            HStack(spacing: 6) {
+                Text(model.statusText)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(model.statusTone.swiftUIColor)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4.5)
+                    .background(model.statusTone.swiftUIFillColor)
+                    .overlay {
+                        Capsule().stroke(model.statusTone.swiftUIBorderColor, lineWidth: 0.8)
+                    }
+                    .clipShape(Capsule())
+
+                if shouldShowHeaderPanelToggle {
+                    Button(action: togglePanelMode) {
+                        Image(systemName: model.panelMode.toggleSymbol)
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 30, height: 30)
+                    }
+                    .buttonStyle(.plain)
+                    .modifier(GlassCapsuleModifier(glassNamespace: glassNamespace, id: "panel-mode-toggle"))
+                }
+            }
+        }
+    }
+
+    private var shouldShowHeaderPanelToggle: Bool {
+        model.panelMode == .settings || !model.canToggleEmail
+    }
+
+    private var metaRow: some View {
+        HStack(spacing: 8) {
+            Text(model.footerText)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 6)
+
+            if model.canToggleEmail {
+                if #available(macOS 26.0, *) {
+                    GlassEffectContainer(spacing: 6) {
+                        emailControls
+                    }
+                } else {
+                    emailControls
+                }
+            }
+        }
+    }
+
+    private var emailControls: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Button(action: { onOpenDashboard?() }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "person")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+
+                        Text(model.emailText)
+                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: { onToggleEmail?() }) {
+                    Image(systemName: model.isEmailVisible ? "eye.slash" : "eye")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 9)
+            .frame(height: 26)
+            .fixedSize(horizontal: true, vertical: false)
+            .modifier(GlassCapsuleModifier(glassNamespace: glassNamespace, id: "email-pill"))
+
+            Button(action: togglePanelMode) {
+                Image(systemName: model.panelMode.toggleSymbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .modifier(GlassCapsuleModifier(glassNamespace: glassNamespace, id: "email-panel-toggle"))
+        }
+    }
+
+    private var heroPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("套餐剩余额度")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Text(model.remainingValue)
+                    .font(.system(size: 29, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                compactMetric(
+                    title: model.usageLabel,
+                    value: model.usageValue,
+                    alignment: .leading
+                )
+                .frame(width: 94, alignment: .leading)
+
+                renewalMetricCard
+                .layoutPriority(1)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentMaterialSurface(cornerRadius: 18)
+    }
+
+    @ViewBuilder
+    private var packageSection: some View {
+        if let title = model.packageSectionTitle, !model.packageItems.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 6)
+
+                    Text("\(model.packageItems.count)")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(.thinMaterial)
+                        .clipShape(Capsule())
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(model.packageItems.enumerated()), id: \.offset) { _, item in
+                        packageRow(item)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func packageRow(_ item: SummaryPackageItem) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(item.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    Text(item.badgeText)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(item.badgeTone.swiftUIColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(item.badgeTone.swiftUIFillColor)
+                        .overlay {
+                            Capsule().stroke(item.badgeTone.swiftUIBorderColor, lineWidth: 0.8)
+                        }
+                        .clipShape(Capsule())
+                }
+
+                Text(item.subtitle)
+                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.84)
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentMaterialSurface(cornerRadius: 15)
+    }
+
+    private var progressSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(model.progressLabel)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                HStack(spacing: 6) {
+                    if let progressPrefix = model.progressPrefix {
+                        Text(progressPrefix)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.84)
+                    }
+
+                    Text(model.progressValue)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                }
+            }
+
+            GeometryReader { proxy in
+                let value = model.progress ?? 0
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.quaternary)
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .accentColor.opacity(0.72),
+                                    .accentColor.opacity(0.34)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: max(10, proxy.size.width * value))
+                }
+            }
+            .frame(height: 8)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentMaterialSurface(cornerRadius: 15)
+    }
+
+    @ViewBuilder
+    private var settingsActionPanel: some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: 8) {
+                settingsControls
+            }
+            .padding(.top, 2)
+        } else {
+            settingsControls
+                .padding(.top, 2)
+        }
+    }
+
+    private var settingsControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Rectangle()
+                .fill(.quaternary)
+                .frame(height: 1)
+                .padding(.bottom, 2)
+
+            MenuActionButton(
+                title: "API Key",
+                subtitle: model.hasAPIKey ? "已配置" : "未配置",
+                systemImage: "key.horizontal",
+                shortcut: "⌘K",
+                prominent: false,
+                action: onSetAPIKey,
+                useInfoCardBackground: true
+            )
+
+            MenuActionButton(
+                title: "轮询间隔",
+                subtitle: model.pollIntervalText,
+                systemImage: "timer",
+                shortcut: "⌘I",
+                prominent: false,
+                action: onSetInterval,
+                useInfoCardBackground: true
+            )
+
+            MenuActionButton(
+                title: "立即刷新",
+                subtitle: nil,
+                systemImage: "arrow.clockwise",
+                shortcut: "⌘R",
+                prominent: true,
+                action: onRefresh,
+                useInfoCardBackground: true
+            )
+
+            MenuActionButton(
+                title: "打开伊莉丝控制台",
+                subtitle: nil,
+                systemImage: "safari",
+                shortcut: "⌘D",
+                prominent: false,
+                action: onOpenDashboard,
+                useInfoCardBackground: true
+            )
+
+            displayStyleSection
+
+            MenuActionButton(
+                title: "退出",
+                subtitle: nil,
+                systemImage: "power",
+                shortcut: "⌘Q",
+                prominent: false,
+                action: onQuit,
+                useInfoCardBackground: true
+            )
+        }
+    }
+
+    private var displayStyleSection: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Text("状态栏样式")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 6)
+
+                Text(model.displayStyle.chipTitle)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(.thinMaterial)
+                    .clipShape(Capsule())
+            }
+
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2),
+                spacing: 8
+            ) {
+                ForEach(StatusDisplayStyle.allCases, id: \.rawValue) { style in
+                    StyleChipButton(
+                        style: style,
+                        isSelected: style == model.displayStyle
+                    ) {
+                        applyDisplayStyle(style)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentMaterialSurface(cornerRadius: 16)
+    }
+
+    private func applyDisplayStyle(_ style: StatusDisplayStyle) {
+        guard style != model.displayStyle else { return }
+        if reduceMotion {
+            onSelectDisplayStyle?(style)
             return
         }
+        withAnimation(.spring(duration: 0.32, bounce: 0.20)) {
+            onSelectDisplayStyle?(style)
+        }
+    }
 
-        let clamped = max(0, min(1, progress))
-        let fillWidth = max(bounds.height, bounds.width * clamped)
-        let fillRect = CGRect(x: bounds.minX, y: bounds.minY, width: min(bounds.width, fillWidth), height: bounds.height)
-        fillLayer.isHidden = false
-        fillLayer.frame = fillRect
-        fillLayer.cornerRadius = bounds.height / 2
+    private func togglePanelMode() {
+        if reduceMotion {
+            onTogglePanelMode?()
+            return
+        }
+        withAnimation(.spring(duration: 0.28, bounce: 0.15)) {
+            onTogglePanelMode?()
+        }
+    }
+
+    private func compactMetric(
+        title: String,
+        value: String,
+        alignment: HorizontalAlignment,
+        valueFontSize: CGFloat = 12,
+        valueLineLimit: Int = 1,
+        valueMinimumScaleFactor: CGFloat = 0.72
+    ) -> some View {
+        VStack(alignment: alignment, spacing: 3) {
+            Text(title)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.system(size: valueFontSize, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .lineLimit(valueLineLimit)
+                .minimumScaleFactor(valueMinimumScaleFactor)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentMaterialSurface(cornerRadius: 14)
+    }
+
+    private var renewalMetricCard: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(model.renewalLabel)
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 4)
+
+                Button(action: { onOpenPricing?() }) {
+                    Text("去续费")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.green)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(model.renewalValue)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentMaterialSurface(cornerRadius: 14)
+    }
+}
+
+private struct GlassCapsuleModifier: ViewModifier {
+    let glassNamespace: Namespace.ID
+    let id: String
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content
+                .glassEffect(.regular.interactive(), in: Capsule())
+                .glassEffectID(id, in: glassNamespace)
+        } else {
+            content
+                .liquidGlassCapsule()
+        }
     }
 }
 
 private final class StatusSummaryView: NSView {
-    static let preferredWidth: CGFloat = 388
+    static let preferredWidth: CGFloat = 316
 
-    var onToggleEmail: (() -> Void)?
-    private var preferredHeight: CGFloat = 276
+    var onTogglePanelMode: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onToggleEmail: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onRefresh: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onSetAPIKey: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onSetInterval: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onOpenDashboard: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onOpenPricing: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onQuit: (() -> Void)? {
+        didSet { updateRootView() }
+    }
 
-    private let cardView = NSView()
-    private let titleLabel = NSTextField(labelWithString: "")
-    private let statusBadgeContainer = NSView()
-    private let statusBadgeLabel = NSTextField(labelWithString: "")
-    private let metaLabel = NSTextField(labelWithString: "")
-    private let emailPillContainer = NSView()
-    private let emailCaptionLabel = NSTextField(labelWithString: "邮箱")
-    private let emailValueLabel = NSTextField(labelWithString: "")
-    private let emailToggleButton = NSButton()
-    private let heroContainer = NSView()
-    private let balanceCaptionLabel = NSTextField(labelWithString: "套餐剩余额度")
-    private let balanceValueLabel = NSTextField(labelWithString: "")
-    private let heroDivider = NSBox()
-    private let usageMetricView = SummaryInlineMetricView(frame: .zero)
-    private let renewalMetricView = SummaryInlineMetricView(frame: .zero)
-    private let packageSectionTitleLabel = NSTextField(labelWithString: "")
-    private let packageStack = NSStackView()
-    private let progressLabel = NSTextField(labelWithString: "")
-    private let progressValueLabel = NSTextField(labelWithString: "")
-    private let progressBarView = SummaryProgressBarView(frame: .zero)
+    private var model = StatusSummaryViewModel.placeholder
+    private let hostingView: NSHostingView<LiquidGlassSummaryPanel>
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: Self.preferredWidth, height: preferredHeight)
+        let size = hostingView.fittingSize
+        return NSSize(width: Self.preferredWidth, height: max(230, size.height))
     }
 
     override init(frame frameRect: NSRect) {
+        hostingView = NSHostingView(
+            rootView: LiquidGlassSummaryPanel(
+                model: .placeholder,
+                onTogglePanelMode: nil,
+                onToggleEmail: nil,
+                onRefresh: nil,
+                onSetAPIKey: nil,
+                onSetInterval: nil,
+                onOpenDashboard: nil,
+                onOpenPricing: nil,
+                onSelectDisplayStyle: nil,
+                onQuit: nil
+            )
+        )
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
-
-        cardView.translatesAutoresizingMaskIntoConstraints = false
-        cardView.wantsLayer = true
-        cardView.layer?.cornerRadius = 18
-        cardView.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.98).cgColor
-        cardView.layer?.borderWidth = 1
-        cardView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.12).cgColor
-        addSubview(cardView)
-
-        let contentStack = NSStackView()
-        contentStack.translatesAutoresizingMaskIntoConstraints = false
-        contentStack.orientation = .vertical
-        contentStack.alignment = .leading
-        contentStack.spacing = 12
-        cardView.addSubview(contentStack)
-
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = NSFont.systemFont(ofSize: 17, weight: .bold)
-        titleLabel.textColor = .labelColor
-        titleLabel.lineBreakMode = .byTruncatingTail
-
-        statusBadgeContainer.translatesAutoresizingMaskIntoConstraints = false
-        statusBadgeContainer.wantsLayer = true
-        statusBadgeContainer.layer?.cornerRadius = 999
-        statusBadgeContainer.layer?.borderWidth = 1
-
-        statusBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusBadgeLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        statusBadgeContainer.addSubview(statusBadgeLabel)
-
-        let titleSpacer = NSView()
-        titleSpacer.translatesAutoresizingMaskIntoConstraints = false
-        titleSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        let titleRow = NSStackView(views: [titleLabel, titleSpacer, statusBadgeContainer])
-        titleRow.translatesAutoresizingMaskIntoConstraints = false
-        titleRow.orientation = .horizontal
-        titleRow.alignment = .centerY
-        titleRow.spacing = 10
-        contentStack.addArrangedSubview(titleRow)
-
-        metaLabel.translatesAutoresizingMaskIntoConstraints = false
-        metaLabel.font = NSFont.systemFont(ofSize: 11, weight: .regular)
-        metaLabel.textColor = .secondaryLabelColor
-        metaLabel.lineBreakMode = .byTruncatingTail
-
-        emailPillContainer.translatesAutoresizingMaskIntoConstraints = false
-        emailPillContainer.wantsLayer = true
-        emailPillContainer.layer?.cornerRadius = 999
-        emailPillContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
-        emailPillContainer.layer?.borderWidth = 1
-        emailPillContainer.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.12).cgColor
-
-        emailCaptionLabel.translatesAutoresizingMaskIntoConstraints = false
-        emailCaptionLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        emailCaptionLabel.textColor = .secondaryLabelColor
-
-        emailValueLabel.translatesAutoresizingMaskIntoConstraints = false
-        emailValueLabel.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .medium)
-        emailValueLabel.textColor = .labelColor
-        emailValueLabel.lineBreakMode = .byTruncatingMiddle
-        emailValueLabel.maximumNumberOfLines = 1
-
-        emailToggleButton.translatesAutoresizingMaskIntoConstraints = false
-        emailToggleButton.isBordered = false
-        emailToggleButton.bezelStyle = .regularSquare
-        emailToggleButton.imagePosition = .imageOnly
-        emailToggleButton.contentTintColor = .secondaryLabelColor
-        emailToggleButton.target = self
-        emailToggleButton.action = #selector(handleToggleEmail)
-
-        emailPillContainer.addSubview(emailCaptionLabel)
-        emailPillContainer.addSubview(emailValueLabel)
-        emailPillContainer.addSubview(emailToggleButton)
-
-        let metaSpacer = NSView()
-        metaSpacer.translatesAutoresizingMaskIntoConstraints = false
-        metaSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        let metaRow = NSStackView(views: [metaLabel, metaSpacer, emailPillContainer])
-        metaRow.translatesAutoresizingMaskIntoConstraints = false
-        metaRow.orientation = .horizontal
-        metaRow.alignment = .centerY
-        metaRow.spacing = 10
-        contentStack.addArrangedSubview(metaRow)
-
-        heroContainer.translatesAutoresizingMaskIntoConstraints = false
-        heroContainer.wantsLayer = true
-        heroContainer.layer?.cornerRadius = 16
-        heroContainer.layer?.backgroundColor = NSColor.systemTeal.withAlphaComponent(0.055).cgColor
-        heroContainer.layer?.borderWidth = 1
-        heroContainer.layer?.borderColor = NSColor.systemTeal.withAlphaComponent(0.12).cgColor
-
-        balanceCaptionLabel.translatesAutoresizingMaskIntoConstraints = false
-        balanceCaptionLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        balanceCaptionLabel.textColor = .secondaryLabelColor
-
-        balanceValueLabel.translatesAutoresizingMaskIntoConstraints = false
-        balanceValueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 34, weight: .bold)
-        balanceValueLabel.textColor = .labelColor
-
-        heroDivider.translatesAutoresizingMaskIntoConstraints = false
-        heroDivider.boxType = .separator
-
-        let insightStack = NSStackView(views: [usageMetricView, renewalMetricView])
-        insightStack.translatesAutoresizingMaskIntoConstraints = false
-        insightStack.orientation = .vertical
-        insightStack.spacing = 10
-        insightStack.alignment = .leading
-
-        heroContainer.addSubview(balanceCaptionLabel)
-        heroContainer.addSubview(balanceValueLabel)
-        heroContainer.addSubview(heroDivider)
-        heroContainer.addSubview(insightStack)
-        contentStack.addArrangedSubview(heroContainer)
-
-        packageSectionTitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        packageSectionTitleLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        packageSectionTitleLabel.textColor = .secondaryLabelColor
-        contentStack.addArrangedSubview(packageSectionTitleLabel)
-
-        packageStack.translatesAutoresizingMaskIntoConstraints = false
-        packageStack.orientation = .vertical
-        packageStack.spacing = 10
-        contentStack.addArrangedSubview(packageStack)
-
-        progressLabel.translatesAutoresizingMaskIntoConstraints = false
-        progressLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        progressLabel.textColor = .secondaryLabelColor
-
-        progressValueLabel.translatesAutoresizingMaskIntoConstraints = false
-        progressValueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .semibold)
-        progressValueLabel.textColor = .labelColor
-
-        let progressSpacer = NSView()
-        progressSpacer.translatesAutoresizingMaskIntoConstraints = false
-        progressSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        let progressHeaderRow = NSStackView(views: [progressLabel, progressSpacer, progressValueLabel])
-        progressHeaderRow.translatesAutoresizingMaskIntoConstraints = false
-        progressHeaderRow.orientation = .horizontal
-        progressHeaderRow.alignment = .centerY
-
-        contentStack.addArrangedSubview(progressHeaderRow)
-        contentStack.addArrangedSubview(progressBarView)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hostingView)
 
         NSLayoutConstraint.activate([
-            cardView.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            cardView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            cardView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            cardView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-
-            contentStack.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 16),
-            contentStack.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 16),
-            contentStack.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -16),
-            contentStack.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -16),
-
-            titleRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            metaRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            heroContainer.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            packageSectionTitleLabel.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            packageStack.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            progressHeaderRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            progressBarView.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-
-            statusBadgeLabel.topAnchor.constraint(equalTo: statusBadgeContainer.topAnchor, constant: 4),
-            statusBadgeLabel.leadingAnchor.constraint(equalTo: statusBadgeContainer.leadingAnchor, constant: 8),
-            statusBadgeLabel.trailingAnchor.constraint(equalTo: statusBadgeContainer.trailingAnchor, constant: -8),
-            statusBadgeLabel.bottomAnchor.constraint(equalTo: statusBadgeContainer.bottomAnchor, constant: -4),
-
-            emailCaptionLabel.leadingAnchor.constraint(equalTo: emailPillContainer.leadingAnchor, constant: 10),
-            emailCaptionLabel.centerYAnchor.constraint(equalTo: emailPillContainer.centerYAnchor),
-            emailValueLabel.leadingAnchor.constraint(equalTo: emailCaptionLabel.trailingAnchor, constant: 6),
-            emailValueLabel.centerYAnchor.constraint(equalTo: emailPillContainer.centerYAnchor),
-            emailToggleButton.leadingAnchor.constraint(equalTo: emailValueLabel.trailingAnchor, constant: 6),
-            emailToggleButton.trailingAnchor.constraint(equalTo: emailPillContainer.trailingAnchor, constant: -8),
-            emailToggleButton.centerYAnchor.constraint(equalTo: emailPillContainer.centerYAnchor),
-            emailToggleButton.widthAnchor.constraint(equalToConstant: 16),
-            emailToggleButton.heightAnchor.constraint(equalToConstant: 16),
-            emailPillContainer.heightAnchor.constraint(equalToConstant: 28),
-
-            balanceCaptionLabel.topAnchor.constraint(equalTo: heroContainer.topAnchor, constant: 16),
-            balanceCaptionLabel.leadingAnchor.constraint(equalTo: heroContainer.leadingAnchor, constant: 16),
-            balanceCaptionLabel.trailingAnchor.constraint(equalTo: heroDivider.leadingAnchor, constant: -16),
-
-            balanceValueLabel.topAnchor.constraint(equalTo: balanceCaptionLabel.bottomAnchor, constant: 6),
-            balanceValueLabel.leadingAnchor.constraint(equalTo: heroContainer.leadingAnchor, constant: 16),
-            balanceValueLabel.trailingAnchor.constraint(equalTo: heroDivider.leadingAnchor, constant: -16),
-            balanceValueLabel.bottomAnchor.constraint(lessThanOrEqualTo: heroContainer.bottomAnchor, constant: -16),
-
-            heroDivider.topAnchor.constraint(equalTo: heroContainer.topAnchor, constant: 16),
-            heroDivider.bottomAnchor.constraint(equalTo: heroContainer.bottomAnchor, constant: -16),
-            heroDivider.widthAnchor.constraint(equalToConstant: 1),
-            heroDivider.centerXAnchor.constraint(equalTo: heroContainer.centerXAnchor, constant: -20),
-
-            insightStack.topAnchor.constraint(equalTo: heroContainer.topAnchor, constant: 16),
-            insightStack.leadingAnchor.constraint(equalTo: heroDivider.trailingAnchor, constant: 16),
-            insightStack.trailingAnchor.constraint(equalTo: heroContainer.trailingAnchor, constant: -16),
-            insightStack.bottomAnchor.constraint(lessThanOrEqualTo: heroContainer.bottomAnchor, constant: -16),
-            insightStack.centerYAnchor.constraint(equalTo: heroContainer.centerYAnchor),
-
-            heroContainer.heightAnchor.constraint(equalToConstant: 114),
-            progressBarView.heightAnchor.constraint(equalToConstant: 8),
+            hostingView.topAnchor.constraint(equalTo: topAnchor),
+            hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }
 
@@ -733,59 +1181,25 @@ private final class StatusSummaryView: NSView {
     }
 
     func apply(_ model: StatusSummaryViewModel) {
-        titleLabel.stringValue = model.title
-        statusBadgeLabel.stringValue = model.statusText
-        statusBadgeLabel.textColor = model.statusTone.textColor
-        statusBadgeContainer.layer?.backgroundColor = model.statusTone.fillColor.cgColor
-        statusBadgeContainer.layer?.borderColor = model.statusTone.borderColor.cgColor
-
-        metaLabel.stringValue = model.footerText
-
-        emailValueLabel.stringValue = model.emailText
-        emailPillContainer.isHidden = !model.canToggleEmail
-        emailToggleButton.image = makeSymbolImage(
-            model.isEmailVisible ? "eye.slash" : "eye",
-            pointSize: 12,
-            weight: .medium
-        )
-        emailToggleButton.toolTip = model.isEmailVisible ? "隐藏邮箱" : "显示邮箱"
-
-        balanceValueLabel.stringValue = model.remainingValue
-        usageMetricView.apply(
-            caption: model.usageLabel,
-            value: model.usageValue,
-            valueFont: NSFont.monospacedDigitSystemFont(ofSize: 16, weight: .semibold)
-        )
-        renewalMetricView.apply(
-            caption: model.renewalLabel,
-            value: model.renewalValue,
-            valueFont: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-        )
-
-        packageSectionTitleLabel.isHidden = model.packageItems.isEmpty
-        packageSectionTitleLabel.stringValue = model.packageSectionTitle ?? "有效套餐"
-        packageStack.arrangedSubviews.forEach { view in
-            packageStack.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
-        for item in model.packageItems {
-            let rowView = SummaryPackageRowView(frame: .zero)
-            rowView.apply(item)
-            packageStack.addArrangedSubview(rowView)
-            rowView.widthAnchor.constraint(equalTo: packageStack.widthAnchor).isActive = true
-        }
-
-        progressLabel.stringValue = model.progressLabel
-        progressValueLabel.stringValue = model.progressValue
-        progressBarView.progress = model.progress
-
-        layoutSubtreeIfNeeded()
-        preferredHeight = max(276, cardView.fittingSize.height + 16)
-        invalidateIntrinsicContentSize()
+        self.model = model
+        updateRootView()
     }
 
-    @objc private func handleToggleEmail() {
-        onToggleEmail?()
+    private func updateRootView() {
+        hostingView.rootView = LiquidGlassSummaryPanel(
+            model: model,
+            onTogglePanelMode: onTogglePanelMode,
+            onToggleEmail: onToggleEmail,
+            onRefresh: onRefresh,
+            onSetAPIKey: onSetAPIKey,
+            onSetInterval: onSetInterval,
+            onOpenDashboard: onOpenDashboard,
+            onOpenPricing: onOpenPricing,
+            onSelectDisplayStyle: onSelectDisplayStyle,
+            onQuit: onQuit
+        )
+        layoutSubtreeIfNeeded()
+        invalidateIntrinsicContentSize()
     }
 }
 
@@ -802,14 +1216,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     private var apiKey: String = ""
     private var pollInterval: TimeInterval = 5
     private var displayStyle: StatusDisplayStyle = .remaining
-    private var displayStyleMenuItems: [StatusDisplayStyle: NSMenuItem] = [:]
+    private var panelMode: MenuPanelMode = .statistics
     private var statusFallbackText = "余额: --"
     private var latestUsage = "--"
     private var latestRemaining = "--"
     private var latestRenewal = "--"
     private var latestMessage = "等待数据"
-    private var latestUsageLabel = "套餐用量(已用)"
+    private var latestUsageLabel = "已用/总"
     private var latestProgressLabel = "用量进度"
+    private var latestProgressPrefix: String?
     private var latestEmail: String?
     private var latestPackageItems: [SummaryPackageItem] = []
     private var latestUsedPercent: Double?
@@ -858,47 +1273,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
 
     private func setupMenu() {
         menu.delegate = self
+        summaryView.onTogglePanelMode = { [weak self] in
+            self?.togglePanelMode()
+        }
         summaryView.onToggleEmail = { [weak self] in
             self?.handleToggleEmailVisibility()
         }
+        summaryView.onRefresh = { [weak self] in
+            self?.performMenuAction {
+                self?.refreshNow()
+            }
+        }
+        summaryView.onSetAPIKey = { [weak self] in
+            self?.performMenuAction {
+                self?.handleSetAPIKey()
+            }
+        }
+        summaryView.onSetInterval = { [weak self] in
+            self?.performMenuAction {
+                self?.handleSetInterval()
+            }
+        }
+        summaryView.onOpenDashboard = { [weak self] in
+            self?.performMenuAction {
+                self?.handleOpenDashboard()
+            }
+        }
+        summaryView.onOpenPricing = { [weak self] in
+            self?.performMenuAction {
+                self?.handleOpenPricing()
+            }
+        }
+        summaryView.onSelectDisplayStyle = { [weak self] style in
+            self?.selectDisplayStyle(style)
+        }
+        summaryView.onQuit = { [weak self] in
+            self?.performMenuAction {
+                self?.handleQuit()
+            }
+        }
         summaryMenuItem.view = summaryView
         menu.addItem(summaryMenuItem)
-        menu.addItem(NSMenuItem.separator())
-
-        let refreshItem = NSMenuItem(title: "立即刷新", action: #selector(handleRefresh), keyEquivalent: "r")
-        refreshItem.target = self
-        menu.addItem(refreshItem)
-
-        let apiKeyItem = NSMenuItem(title: "设置 API Key...", action: #selector(handleSetAPIKey), keyEquivalent: "k")
-        apiKeyItem.target = self
-        menu.addItem(apiKeyItem)
-
-        let intervalItem = NSMenuItem(title: "设置轮询间隔...", action: #selector(handleSetInterval), keyEquivalent: "i")
-        intervalItem.target = self
-        menu.addItem(intervalItem)
-
-        let openDashboardItem = NSMenuItem(title: "打开伊莉丝控制台", action: #selector(handleOpenDashboard), keyEquivalent: "d")
-        openDashboardItem.target = self
-        menu.addItem(openDashboardItem)
-
-        let styleItem = NSMenuItem(title: "状态栏样式", action: nil, keyEquivalent: "")
-        let styleSubmenu = NSMenu(title: "状态栏样式")
-        for style in StatusDisplayStyle.allCases {
-            let item = NSMenuItem(title: style.title, action: #selector(handleSelectDisplayStyle(_:)), keyEquivalent: "")
-            item.target = self
-            item.tag = style.rawValue
-            styleSubmenu.addItem(item)
-            displayStyleMenuItems[style] = item
-        }
-        styleItem.submenu = styleSubmenu
-        menu.addItem(styleItem)
-        updateDisplayStyleMenuState()
-
-        menu.addItem(NSMenuItem.separator())
-        let quitItem = NSMenuItem(title: "退出", action: #selector(handleQuit), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-
         statusItem.menu = menu
         renderSummaryView()
     }
@@ -915,10 +1330,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     }
 
     @objc private func handleTimerTick() {
-        refreshNow()
-    }
-
-    @objc private func handleRefresh() {
         refreshNow()
     }
 
@@ -985,12 +1396,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         NSWorkspace.shared.open(url)
     }
 
-    @objc private func handleSelectDisplayStyle(_ sender: NSMenuItem) {
-        guard let style = StatusDisplayStyle(rawValue: sender.tag) else { return }
+    @objc private func handleOpenPricing() {
+        guard let url = URL(string: AppMeta.pricingURL) else {
+            showError("续费链接无效")
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func selectDisplayStyle(_ style: StatusDisplayStyle) {
         displayStyle = style
         saveConfiguration()
-        updateDisplayStyleMenuState()
+        renderSummaryView()
         renderStatusBar()
+    }
+
+    private func togglePanelMode() {
+        panelMode = panelMode == .statistics ? .settings : .statistics
+        renderSummaryView()
     }
 
     @objc private func handleQuit() {
@@ -1084,13 +1507,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
 
                 let remaining = remainingNumber.display
                 let usageRemainingNumber = displayUsagePayload?.remainingQuota ?? remainingNumber
+                let packageRemainingNumber = packageUsagePayload?.remainingQuota ?? remainingNumber
                 let usedPercent = Self.resolveUsedPercentage(usage: displayUsagePayload, remaining: usageRemainingNumber)
+                let usageQuotaPair = Self.resolveUsageQuotaPair(usage: displayUsagePayload, remaining: usageRemainingNumber)
+                let dailyUsagePair = Self.resolveUsageQuotaPair(usage: packageUsagePayload, remaining: packageRemainingNumber)
                 let renewal = Self.resolveRenewalText(package: state.package)
                 let packageItems = Self.buildPackageSummaryItems(package: state.package)
-                let usageLabel = weeklyUsagePayload == nil ? "套餐用量(已用)" : "本周用量(已用)"
+                let usageLabel = "已用/总"
                 let progressLabel = weeklyUsagePayload == nil ? "用量进度" : "本周用量进度"
+                let progressPrefix = usageQuotaPair.map { "\($0.used)/\($0.total)" }
                 let usage: String
-                if let usedPercent {
+                if let dailyUsagePair {
+                    usage = "\(dailyUsagePair.used)/\(dailyUsagePair.total)"
+                } else if let usageQuotaPair {
+                    usage = "\(usageQuotaPair.used)/\(usageQuotaPair.total)"
+                } else if let usedPercent {
                     usage = String(format: "%.2f%%", usedPercent)
                 } else if let totalCost = displayUsagePayload?.totalCost?.display {
                     usage = "总消费: \(totalCost)"
@@ -1110,7 +1541,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                         renewal: renewal ?? "--",
                         packageItems: packageItems,
                         usageLabel: usageLabel,
-                        progressLabel: progressLabel
+                        progressLabel: progressLabel,
+                        progressPrefix: progressPrefix
                     )
                 }
             } catch {
@@ -1145,8 +1577,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         email: String?,
         renewal: String = "--",
         packageItems: [SummaryPackageItem] = [],
-        usageLabel: String = "套餐用量(已用)",
-        progressLabel: String = "用量进度"
+        usageLabel: String = "已用/总",
+        progressLabel: String = "用量进度",
+        progressPrefix: String? = nil
     ) {
         latestUsage = usage
         latestRemaining = remaining
@@ -1154,6 +1587,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         latestMessage = message
         latestUsageLabel = usageLabel
         latestProgressLabel = progressLabel
+        latestProgressPrefix = progressPrefix
         latestEmail = email
         latestPackageItems = packageItems
         latestUsedPercent = usedPercent
@@ -1202,9 +1636,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 packageSectionTitle: packageSectionTitle,
                 packageItems: latestPackageItems,
                 progressLabel: latestProgressLabel,
+                progressPrefix: latestProgressPrefix,
                 progressValue: progressValue,
                 progress: latestUsedPercent.map { max(0, min(100, $0)) / 100 },
-                footerText: latestMessage
+                footerText: latestMessage,
+                hasAPIKey: !apiKey.isEmpty,
+                pollIntervalText: "\(Int(pollInterval)) 秒",
+                displayStyle: displayStyle,
+                panelMode: panelMode
             )
         )
         summaryView.frame = NSRect(origin: .zero, size: summaryView.intrinsicContentSize)
@@ -1231,9 +1670,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         return ("等待中", .neutral)
     }
 
-    private func updateDisplayStyleMenuState() {
-        for style in StatusDisplayStyle.allCases {
-            displayStyleMenuItems[style]?.state = (style == displayStyle) ? .on : .off
+    private func performMenuAction(_ action: @escaping () -> Void) {
+        menu.cancelTracking()
+        DispatchQueue.main.async {
+            action()
         }
     }
 
@@ -1288,37 +1728,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             .foregroundColor: NSColor.labelColor
         ]
         button.attributedTitle = NSAttributedString(string: text, attributes: attrs)
-    }
-
-    private func applyTwoLineTitle(top: String, bottom: String) {
-        guard let button = statusItem.button else { return }
-        statusItem.length = AppMeta.stackedStatusMinWidth
-        button.alignment = .center
-        button.cell?.wraps = true
-        button.cell?.lineBreakMode = .byClipping
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineBreakMode = .byClipping
-
-        let combined = NSMutableAttributedString(
-            string: "\(top)\n",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
-                .foregroundColor: NSColor.labelColor,
-                .paragraphStyle: paragraph
-            ]
-        )
-        combined.append(
-            NSAttributedString(
-                string: bottom,
-                attributes: [
-                    .font: NSFont.systemFont(ofSize: 9, weight: .regular),
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                    .paragraphStyle: paragraph
-                ]
-            )
-        )
-        button.attributedTitle = combined
     }
 
     private func applyTwoLineImage(top: String, bottom: String) {
@@ -1454,33 +1863,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         return image
     }
 
-    private func makeCircularProgressImage(progress: Double) -> NSImage {
-        let size = NSSize(width: 14, height: 14)
-        let image = NSImage(size: size)
-        image.lockFocus()
-
-        let center = NSPoint(x: size.width / 2, y: size.height / 2)
-        let radius = min(size.width, size.height) / 2 - 1.5
-        let startAngle: CGFloat = 90
-        let endAngle = startAngle - CGFloat(max(0, min(1, progress)) * 360)
-
-        let bgPath = NSBezierPath()
-        bgPath.appendArc(withCenter: center, radius: radius, startAngle: 0, endAngle: 360)
-        bgPath.lineWidth = 2
-        NSColor.tertiaryLabelColor.setStroke()
-        bgPath.stroke()
-
-        let fgPath = NSBezierPath()
-        fgPath.appendArc(withCenter: center, radius: radius, startAngle: startAngle, endAngle: endAngle, clockwise: true)
-        fgPath.lineWidth = 2
-        NSColor.systemGreen.setStroke()
-        fgPath.stroke()
-
-        image.unlockFocus()
-        image.isTemplate = false
-        return image
-    }
-
     nonisolated private static func resolveUsedPercentage(usage: UsagePayload?, remaining: FlexibleNumber) -> Double? {
         if let fromAPI = usage?.usedPercentage?.doubleValue {
             return fromAPI
@@ -1495,6 +1877,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         return (1 - (remainingQuota / totalQuota)) * 100
     }
 
+    nonisolated private static func resolveUsageQuotaPair(
+        usage: UsagePayload?,
+        remaining: FlexibleNumber
+    ) -> (used: String, total: String)? {
+        guard let usedQuota = resolveUsedQuota(usage: usage, remaining: remaining),
+              let totalQuota = usage?.totalQuota?.doubleValue else {
+            return nil
+        }
+        return (
+            used: formatQuotaValue(usedQuota),
+            total: formatQuotaValue(totalQuota)
+        )
+    }
+
+    nonisolated private static func resolveUsedQuota(usage: UsagePayload?, remaining: FlexibleNumber) -> Double? {
+        guard
+            let totalQuota = usage?.totalQuota?.doubleValue,
+            totalQuota > 0,
+            let remainingQuota = remaining.doubleValue
+        else {
+            return nil
+        }
+        return max(0, totalQuota - remainingQuota)
+    }
+
+    nonisolated private static func formatQuotaValue(_ value: Double) -> String {
+        guard value.isFinite else { return "--" }
+        let rounded = value.rounded()
+        if abs(value - rounded) < 0.005 {
+            return "\(Int(rounded))"
+        }
+        return String(format: "%.2f", value)
+    }
+
     nonisolated private static func resolveRenewalText(package: PackagePayload?) -> String? {
         guard let package = selectDisplayPackage(from: package?.packages),
               let expiresAt = package.expiresAt,
@@ -1503,10 +1919,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             return nil
         }
 
+        let calendar = Calendar.current
+        let currentYear = calendar.component(.year, from: Date())
+        let renewalYear = calendar.component(.year, from: expiresDate)
+
         let absoluteFormatter = DateFormatter()
         absoluteFormatter.locale = Locale(identifier: "zh_CN")
         absoluteFormatter.timeZone = .current
-        absoluteFormatter.dateFormat = "yyyy-MM-dd HH:mm"
+        absoluteFormatter.dateFormat = renewalYear == currentYear ? "MM-dd HH:mm" : "yyyy-MM-dd HH:mm"
 
         let relativeFormatter = RelativeDateTimeFormatter()
         relativeFormatter.locale = Locale(identifier: "zh_CN")
