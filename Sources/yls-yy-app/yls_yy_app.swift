@@ -1,17 +1,22 @@
 import AppKit
 import Foundation
+import Network
 import SwiftUI
 
 private enum DefaultsKey {
     static let apiKey = "api_key"
     static let interval = "poll_interval_seconds"
     static let displayStyle = "status_display_style"
+    static let mcpEnabled = "mcp_enabled"
+    static let mcpPort = "mcp_port"
 }
 
 private enum AppMeta {
     static let displayName = "伊莉丝Codex账户监控助手"
     static let dashboardURL = "https://code.ylsagi.com/user/dashboard"
     static let pricingURL = "https://code.ylsagi.com/pricing"
+    static let mcpHost = "127.0.0.1"
+    static let defaultMCPPort: UInt16 = 8765
     static let stackedStatusMinWidth: CGFloat = 44
     static let stackedStatusMaxWidth: CGFloat = 72
     static let stackedHorizontalPadding: CGFloat = 4
@@ -302,6 +307,7 @@ private struct StatusSummaryViewModel {
     let pollIntervalText: String
     let displayStyle: StatusDisplayStyle
     let panelMode: MenuPanelMode
+    let mcpStatusText: String
 }
 
 private struct SummaryPackageItem {
@@ -340,7 +346,8 @@ private extension StatusSummaryViewModel {
         hasAPIKey: false,
         pollIntervalText: "--",
         displayStyle: .remaining,
-        panelMode: .statistics
+        panelMode: .statistics,
+        mcpStatusText: "MCP 未启动"
     )
 }
 
@@ -575,6 +582,7 @@ private struct LiquidGlassSummaryPanel: View {
     let onOpenDashboard: (() -> Void)?
     let onOpenPricing: (() -> Void)?
     let onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)?
+    let onConfigureMCP: (() -> Void)?
     let onQuit: (() -> Void)?
 
     @Namespace private var glassNamespace
@@ -933,6 +941,16 @@ private struct LiquidGlassSummaryPanel: View {
             )
 
             MenuActionButton(
+                title: "MCP 服务",
+                subtitle: model.mcpStatusText,
+                systemImage: "server.rack",
+                shortcut: nil,
+                prominent: false,
+                action: onConfigureMCP,
+                useInfoCardBackground: true
+            )
+
+            MenuActionButton(
                 title: "立即刷新",
                 subtitle: nil,
                 systemImage: "arrow.clockwise",
@@ -1131,6 +1149,9 @@ private final class StatusSummaryView: NSView {
     var onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)? {
         didSet { updateRootView() }
     }
+    var onConfigureMCP: (() -> Void)? {
+        didSet { updateRootView() }
+    }
     var onQuit: (() -> Void)? {
         didSet { updateRootView() }
     }
@@ -1155,6 +1176,7 @@ private final class StatusSummaryView: NSView {
                 onOpenDashboard: nil,
                 onOpenPricing: nil,
                 onSelectDisplayStyle: nil,
+                onConfigureMCP: nil,
                 onQuit: nil
             )
         )
@@ -1196,10 +1218,157 @@ private final class StatusSummaryView: NSView {
             onOpenDashboard: onOpenDashboard,
             onOpenPricing: onOpenPricing,
             onSelectDisplayStyle: onSelectDisplayStyle,
+            onConfigureMCP: onConfigureMCP,
             onQuit: onQuit
         )
         layoutSubtreeIfNeeded()
         invalidateIntrinsicContentSize()
+    }
+}
+
+private struct MCPServerSnapshot: Encodable {
+    let generatedAt: String
+    let displayName: String
+    let dashboardURL: String
+    let pricingURL: String
+    let statusText: String
+    let latestMessage: String
+    let remaining: String
+    let usage: String
+    let renewal: String
+    let progressLabel: String
+    let progressPrefix: String?
+    let usedPercent: Double?
+    let email: String?
+    let hasAPIKey: Bool
+    let pollIntervalSeconds: Double
+    let displayStyle: String
+    let packageItems: [MCPPackageItem]
+}
+
+private struct MCPPackageItem: Encodable {
+    let title: String
+    let subtitle: String
+    let badgeText: String
+}
+
+private final class MCPHTTPServer: @unchecked Sendable {
+    private let stateProvider: @Sendable () -> Data
+    private let queue = DispatchQueue(label: "com.yls.codex-monitor.mcp-server")
+    private var listener: NWListener?
+    private(set) var port: UInt16
+    private(set) var isRunning = false
+    var lastError: String?
+
+    init(port: UInt16, stateProvider: @escaping @Sendable () -> Data) {
+        self.port = port
+        self.stateProvider = stateProvider
+    }
+
+    func updatePort(_ newPort: UInt16) throws {
+        if newPort == port {
+            if !isRunning {
+                try start()
+            }
+            return
+        }
+        stop()
+        port = newPort
+        try start()
+    }
+
+    func start() throws {
+        let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        let listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.handle(connection: connection)
+        }
+        listener.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                self?.isRunning = true
+                self?.lastError = nil
+            case .failed(let error):
+                self?.isRunning = false
+                self?.lastError = error.localizedDescription
+            case .cancelled:
+                self?.isRunning = false
+            default:
+                break
+            }
+        }
+        self.listener = listener
+        listener.start(queue: queue)
+    }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
+        isRunning = false
+    }
+
+    private func handle(connection: NWConnection) {
+        connection.start(queue: queue)
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
+            guard let self else {
+                connection.cancel()
+                return
+            }
+            let requestText = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            let path = self.parsePath(from: requestText)
+            let response: Data
+
+            switch path {
+            case "/", "/health":
+                response = self.makeJSONResponse([
+                    "ok": true,
+                    "service": "yls-codex-monitor-mcp",
+                    "port": Int(self.port),
+                    "endpoints": ["/health", "/snapshot", "/mcp/snapshot"]
+                ])
+            case "/snapshot", "/mcp/snapshot":
+                response = self.makeRawJSONResponse(self.stateProvider())
+            default:
+                response = self.makeJSONResponse([
+                    "ok": false,
+                    "error": "not_found",
+                    "path": path
+                ], status: "404 Not Found")
+            }
+
+            connection.send(content: response, completion: .contentProcessed { _ in
+                connection.cancel()
+            })
+        }
+    }
+
+    private func parsePath(from request: String) -> String {
+        guard let firstLine = request.split(separator: "\n", omittingEmptySubsequences: false).first else {
+            return "/"
+        }
+        let components = firstLine.split(separator: " ")
+        guard components.count >= 2 else { return "/" }
+        return String(components[1]).components(separatedBy: "?").first ?? "/"
+    }
+
+    private func makeJSONResponse(_ object: [String: Any], status: String = "200 OK") -> Data {
+        let body = (try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted])) ?? Data("{}".utf8)
+        return makeRawJSONResponse(body, status: status)
+    }
+
+    private func makeRawJSONResponse(_ body: Data, status: String = "200 OK") -> Data {
+        let header = """
+HTTP/1.1 \(status)\r
+Content-Type: application/json; charset=utf-8\r
+Access-Control-Allow-Origin: *\r
+Content-Length: \(body.count)\r
+Connection: close\r
+\r
+"""
+        var data = Data(header.utf8)
+        data.append(body)
+        return data
     }
 }
 
@@ -1218,6 +1387,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     private var displayStyle: StatusDisplayStyle = .remaining
     private var panelMode: MenuPanelMode = .statistics
     private var statusFallbackText = "余额: --"
+    private var mcpEnabled = true
+    private var mcpPort: UInt16 = AppMeta.defaultMCPPort
+    private lazy var mcpServer = MCPHTTPServer(port: mcpPort) { [weak self] in
+        guard let self else { return Data("{}".utf8) }
+        return MainActor.assumeIsolated {
+            self.makeMCPSnapshotData()
+        }
+    }
     private var latestUsage = "--"
     private var latestRemaining = "--"
     private var latestRenewal = "--"
@@ -1236,11 +1413,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         setupMenu()
         setupStatusButton()
         startPolling()
+        startMCPIfNeeded()
         refreshNow()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
+        mcpServer.stop()
     }
 
     private func loadConfiguration() {
@@ -1252,6 +1431,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         }
         let rawStyle = defaults.integer(forKey: DefaultsKey.displayStyle)
         displayStyle = StatusDisplayStyle(rawValue: rawStyle) ?? .remaining
+        if defaults.object(forKey: DefaultsKey.mcpEnabled) != nil {
+            mcpEnabled = defaults.bool(forKey: DefaultsKey.mcpEnabled)
+        }
+        let savedPort = defaults.integer(forKey: DefaultsKey.mcpPort)
+        if let validPort = UInt16(exactly: savedPort), validPort > 0 {
+            mcpPort = validPort
+        }
     }
 
     private func saveConfiguration() {
@@ -1259,6 +1445,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         defaults.set(apiKey, forKey: DefaultsKey.apiKey)
         defaults.set(pollInterval, forKey: DefaultsKey.interval)
         defaults.set(displayStyle.rawValue, forKey: DefaultsKey.displayStyle)
+        defaults.set(mcpEnabled, forKey: DefaultsKey.mcpEnabled)
+        defaults.set(Int(mcpPort), forKey: DefaultsKey.mcpPort)
     }
 
     private func setupStatusButton() {
@@ -1306,6 +1494,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         }
         summaryView.onSelectDisplayStyle = { [weak self] style in
             self?.selectDisplayStyle(style)
+        }
+        summaryView.onConfigureMCP = { [weak self] in
+            self?.performMenuAction {
+                self?.handleConfigureMCP()
+            }
         }
         summaryView.onQuit = { [weak self] in
             self?.performMenuAction {
@@ -1396,6 +1589,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         NSWorkspace.shared.open(url)
     }
 
+    @objc private func handleConfigureMCP() {
+        let alert = NSAlert()
+        alert.messageText = "MCP 服务设置"
+        alert.informativeText = "启动应用时自动在本机启动一个 HTTP MCP 快照服务，供 AI 连接读取最新数据。"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 58))
+
+        let checkbox = NSButton(checkboxWithTitle: "启用 MCP 本地服务", target: nil, action: nil)
+        checkbox.frame = NSRect(x: 0, y: 32, width: 220, height: 20)
+        checkbox.state = mcpEnabled ? .on : .off
+        container.addSubview(checkbox)
+
+        let label = NSTextField(labelWithString: "端口")
+        label.frame = NSRect(x: 0, y: 4, width: 40, height: 22)
+        container.addSubview(label)
+
+        let input = NSTextField(frame: NSRect(x: 44, y: 0, width: 120, height: 24))
+        input.stringValue = String(mcpPort)
+        container.addSubview(input)
+
+        let hint = NSTextField(labelWithString: "示例地址: http://\(AppMeta.mcpHost):\(mcpPort)/mcp/snapshot")
+        hint.textColor = .secondaryLabelColor
+        hint.frame = NSRect(x: 172, y: 4, width: 168, height: 22)
+        container.addSubview(hint)
+
+        alert.accessoryView = container
+
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return }
+
+        let enabled = checkbox.state == .on
+        let parsedPort = UInt16(input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        guard parsedPort > 0 else {
+            showError("MCP 端口必须是 1-65535 之间的数字")
+            return
+        }
+
+        mcpEnabled = enabled
+        mcpPort = parsedPort
+        saveConfiguration()
+        restartMCPIfNeeded()
+        renderSummaryView()
+    }
+
     @objc private func handleOpenPricing() {
         guard let url = URL(string: AppMeta.pricingURL) else {
             showError("续费链接无效")
@@ -1418,6 +1658,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
 
     @objc private func handleQuit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    private func startMCPIfNeeded() {
+        guard mcpEnabled else {
+            mcpServer.stop()
+            return
+        }
+        do {
+            try mcpServer.updatePort(mcpPort)
+        } catch {
+            mcpServer.stop()
+            mcpServer.lastError = error.localizedDescription
+        }
+    }
+
+    private func restartMCPIfNeeded() {
+        mcpServer.stop()
+        startMCPIfNeeded()
+    }
+
+    private func currentMCPStatusText() -> String {
+        if !mcpEnabled {
+            return "已关闭"
+        }
+        if mcpServer.isRunning {
+            return "http://\(AppMeta.mcpHost):\(mcpPort)/mcp/snapshot"
+        }
+        if let error = mcpServer.lastError, !error.isEmpty {
+            return "启动失败: \(error)"
+        }
+        return "启动中..."
+    }
+
+    private func makeMCPSnapshotData() -> Data {
+        let snapshot = MCPServerSnapshot(
+            generatedAt: ISO8601DateFormatter().string(from: Date()),
+            displayName: AppMeta.displayName,
+            dashboardURL: AppMeta.dashboardURL,
+            pricingURL: AppMeta.pricingURL,
+            statusText: currentSummaryStatus().0,
+            latestMessage: latestMessage,
+            remaining: latestRemaining,
+            usage: latestUsage,
+            renewal: latestRenewal,
+            progressLabel: latestProgressLabel,
+            progressPrefix: latestProgressPrefix,
+            usedPercent: latestUsedPercent,
+            email: latestEmail,
+            hasAPIKey: !apiKey.isEmpty,
+            pollIntervalSeconds: pollInterval,
+            displayStyle: displayStyle.title,
+            packageItems: latestPackageItems.map {
+                MCPPackageItem(title: $0.title, subtitle: $0.subtitle, badgeText: $0.badgeText)
+            }
+        )
+        return (try? JSONEncoder().encode(snapshot)) ?? Data("{}".utf8)
     }
 
     private func refreshNow() {
@@ -1643,7 +1939,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 hasAPIKey: !apiKey.isEmpty,
                 pollIntervalText: "\(Int(pollInterval)) 秒",
                 displayStyle: displayStyle,
-                panelMode: panelMode
+                panelMode: panelMode,
+                mcpStatusText: currentMCPStatusText()
             )
         )
         summaryView.frame = NSRect(origin: .zero, size: summaryView.intrinsicContentSize)
