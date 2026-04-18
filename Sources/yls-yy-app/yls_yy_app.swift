@@ -1252,6 +1252,21 @@ private struct MCPPackageItem: Encodable {
     let badgeText: String
 }
 
+private final class MCPSnapshotStore: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.yls.codex-monitor.mcp-snapshot-store")
+    private var data = Data("{}".utf8)
+
+    func get() -> Data {
+        queue.sync { data }
+    }
+
+    func set(_ newData: Data) {
+        queue.sync {
+            data = newData
+        }
+    }
+}
+
 private final class MCPHTTPServer: @unchecked Sendable {
     private let stateProvider: @Sendable () -> Data
     private let resourceURI = "yls://codex-monitor/snapshot"
@@ -1312,53 +1327,124 @@ private final class MCPHTTPServer: @unchecked Sendable {
 
     private func handle(connection: NWConnection) {
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
+        receiveRequest(on: connection, accumulated: Data())
+    }
+
+    private func receiveRequest(on connection: NWConnection, accumulated: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self else {
                 connection.cancel()
                 return
             }
-            let requestText = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            let request = self.parseHTTPRequest(from: requestText)
-            let response: Data
 
-            switch request.path {
-            case "/", "/health":
-                response = self.makeJSONResponse([
-                    "ok": true,
-                    "service": "yls-codex-monitor-mcp",
-                    "port": Int(self.port),
-                    "endpoints": ["/health", "/snapshot", "/mcp/snapshot", "/mcp"],
-                    "tool": self.toolName,
-                    "resource": self.resourceURI
-                ])
-            case "/snapshot", "/mcp/snapshot":
-                response = self.makeRawJSONResponse(self.stateProvider())
-            case "/mcp":
-                response = self.handleMCPRequest(body: request.body)
-            default:
-                response = self.makeJSONResponse([
-                    "ok": false,
-                    "error": "not_found",
-                    "path": request.path
-                ], status: "404 Not Found")
+            if let error {
+                self.lastError = error.localizedDescription
+                connection.cancel()
+                return
             }
 
-            connection.send(content: response, completion: .contentProcessed { _ in
-                connection.cancel()
-            })
+            var buffer = accumulated
+            if let data {
+                buffer.append(data)
+            }
+
+            if let request = self.parseHTTPRequest(from: buffer) {
+                self.respond(to: request, on: connection)
+                return
+            }
+
+            if isComplete {
+                let response = self.makeJSONResponse([
+                    "ok": false,
+                    "error": "bad_request"
+                ], status: "400 Bad Request")
+                connection.send(content: response, completion: .contentProcessed { _ in
+                    connection.cancel()
+                })
+                return
+            }
+
+            self.receiveRequest(on: connection, accumulated: buffer)
         }
     }
 
-    private func parseHTTPRequest(from request: String) -> (path: String, body: Data?) {
-        let normalized = request.replacingOccurrences(of: "\r\n", with: "\n")
-        let sections = normalized.components(separatedBy: "\n\n")
-        let header = sections.first ?? ""
-        let bodyString = sections.dropFirst().joined(separator: "\n\n")
-        let firstLine = header.split(separator: "\n", omittingEmptySubsequences: false).first.map(String.init) ?? ""
+    private func respond(to request: HTTPRequest, on connection: NWConnection) {
+        let response: Data
+
+        switch request.path {
+        case "/", "/health":
+            response = makeJSONResponse([
+                "ok": true,
+                "service": "yls-codex-monitor-mcp",
+                "port": Int(port),
+                "endpoints": ["/health", "/snapshot", "/mcp/snapshot", "/mcp"],
+                "tool": toolName,
+                "resource": resourceURI
+            ])
+        case "/snapshot", "/mcp/snapshot":
+            response = makeRawJSONResponse(stateProvider())
+        case "/mcp":
+            response = handleMCPRequest(body: request.body)
+        default:
+            response = makeJSONResponse([
+                "ok": false,
+                "error": "not_found",
+                "path": request.path
+            ], status: "404 Not Found")
+        }
+
+        connection.send(content: response, completion: .contentProcessed { _ in
+            connection.cancel()
+        })
+    }
+
+    private struct HTTPRequest {
+        let path: String
+        let body: Data?
+    }
+
+    private func parseHTTPRequest(from requestData: Data) -> HTTPRequest? {
+        guard let requestText = String(data: requestData, encoding: .utf8) else { return nil }
+        let separator = "\r\n\r\n"
+        let fallbackSeparator = "\n\n"
+
+        let parts: [String]
+        let headerBodySeparator: String
+        if requestText.contains(separator) {
+            parts = requestText.components(separatedBy: separator)
+            headerBodySeparator = separator
+        } else if requestText.contains(fallbackSeparator) {
+            parts = requestText.components(separatedBy: fallbackSeparator)
+            headerBodySeparator = fallbackSeparator
+        } else {
+            return nil
+        }
+
+        let header = parts.first ?? ""
+        let bodyString = parts.dropFirst().joined(separator: headerBodySeparator)
+        let firstLine = header.split(whereSeparator: \ .isNewline).first.map(String.init) ?? ""
         let components = firstLine.split(separator: " ")
         let path = components.count >= 2 ? String(components[1]).components(separatedBy: "?").first ?? "/" : "/"
-        let body = bodyString.isEmpty ? nil : Data(bodyString.utf8)
-        return (path, body)
+
+        let contentLength = contentLengthFromHeader(header)
+        let bodyData = Data(bodyString.utf8)
+        if bodyData.count < contentLength {
+            return nil
+        }
+
+        let finalBody = contentLength > 0 ? bodyData.prefix(contentLength) : Data()
+        return HTTPRequest(path: path, body: finalBody.isEmpty ? nil : Data(finalBody))
+    }
+
+    private func contentLengthFromHeader(_ header: String) -> Int {
+        for line in header.split(whereSeparator: \ .isNewline) {
+            let raw = String(line)
+            if raw.lowercased().hasPrefix("content-length:") {
+                let value = raw.split(separator: ":", maxSplits: 1).last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
+                return Int(value) ?? 0
+            }
+        }
+        return 0
     }
 
     private func handleMCPRequest(body: Data?) -> Data {
@@ -1497,6 +1583,7 @@ private final class MCPHTTPServer: @unchecked Sendable {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unchecked Sendable {
     private let endpoint = URL(string: "https://codex.ylsagi.com/codex/info")!
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let mcpSnapshotStore = MCPSnapshotStore()
 
     private let menu = NSMenu()
     private let summaryMenuItem = NSMenuItem()
@@ -1512,9 +1599,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     private var mcpPort: UInt16 = AppMeta.defaultMCPPort
     private lazy var mcpServer = MCPHTTPServer(port: mcpPort) { [weak self] in
         guard let self else { return Data("{}".utf8) }
-        return MainActor.assumeIsolated {
-            self.makeMCPSnapshotData()
-        }
+        return self.mcpSnapshotStore.get()
     }
     private var latestUsage = "--"
     private var latestRemaining = "--"
@@ -1531,6 +1616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
         loadConfiguration()
+        mcpSnapshotStore.set(makeMCPSnapshotData())
         setupMenu()
         setupStatusButton()
         startPolling()
@@ -2065,6 +2151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             )
         )
         summaryView.frame = NSRect(origin: .zero, size: summaryView.intrinsicContentSize)
+        mcpSnapshotStore.set(makeMCPSnapshotData())
     }
 
     private func currentSummaryStatus() -> (String, SummaryStatusTone) {
