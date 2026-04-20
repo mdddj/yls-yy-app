@@ -1804,24 +1804,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         alert.addButton(withTitle: "保存")
         alert.addButton(withTitle: "取消")
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 58))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 82))
 
         let checkbox = NSButton(checkboxWithTitle: "启用 MCP 本地服务", target: nil, action: nil)
-        checkbox.frame = NSRect(x: 0, y: 32, width: 220, height: 20)
+        checkbox.frame = NSRect(x: 0, y: 56, width: 220, height: 20)
         checkbox.state = mcpEnabled ? .on : .off
         container.addSubview(checkbox)
 
         let label = NSTextField(labelWithString: "端口")
-        label.frame = NSRect(x: 0, y: 4, width: 40, height: 22)
+        label.frame = NSRect(x: 0, y: 28, width: 40, height: 22)
         container.addSubview(label)
 
-        let input = NSTextField(frame: NSRect(x: 44, y: 0, width: 120, height: 24))
+        let input = NSTextField(frame: NSRect(x: 44, y: 24, width: 120, height: 24))
         input.stringValue = String(mcpPort)
         container.addSubview(input)
 
         let hint = NSTextField(labelWithString: "示例地址: http://\(AppMeta.mcpHost):\(mcpPort)/mcp/snapshot")
         hint.textColor = .secondaryLabelColor
-        hint.frame = NSRect(x: 172, y: 4, width: 168, height: 22)
+        hint.frame = NSRect(x: 0, y: 0, width: 340, height: 22)
         container.addSubview(hint)
 
         alert.accessoryView = container
