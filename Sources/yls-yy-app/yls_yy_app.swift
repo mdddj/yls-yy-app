@@ -354,6 +354,7 @@ private extension StatusSummaryViewModel {
 private extension View {
     @ViewBuilder
     func liquidGlassCapsule() -> some View {
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             self
                 .background {
@@ -371,11 +372,19 @@ private extension View {
                     Capsule().stroke(.quaternary, lineWidth: 0.8)
                 }
         }
+        #else
+        self
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay {
+                Capsule().stroke(.quaternary, lineWidth: 0.8)
+            }
+        #endif
     }
 
     @ViewBuilder
     func compactSurface(cornerRadius: CGFloat, tint: Color = .clear) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             self
                 .background {
@@ -404,6 +413,20 @@ private extension View {
                     shape.stroke(.quaternary, lineWidth: 0.8)
                 }
         }
+        #else
+        self
+            .background {
+                ZStack {
+                    shape
+                        .fill(.ultraThinMaterial)
+                    shape
+                        .fill(tint)
+                }
+            }
+            .overlay {
+                shape.stroke(.quaternary, lineWidth: 0.8)
+            }
+        #endif
     }
 
     @ViewBuilder
@@ -696,6 +719,7 @@ private struct LiquidGlassSummaryPanel: View {
             Spacer(minLength: 6)
 
             if model.canToggleEmail {
+                #if compiler(>=6.2)
                 if #available(macOS 26.0, *) {
                     GlassEffectContainer(spacing: 6) {
                         emailControls
@@ -703,6 +727,9 @@ private struct LiquidGlassSummaryPanel: View {
                 } else {
                     emailControls
                 }
+                #else
+                emailControls
+                #endif
             }
         }
     }
@@ -902,6 +929,7 @@ private struct LiquidGlassSummaryPanel: View {
 
     @ViewBuilder
     private var settingsActionPanel: some View {
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             GlassEffectContainer(spacing: 8) {
                 settingsControls
@@ -911,6 +939,10 @@ private struct LiquidGlassSummaryPanel: View {
             settingsControls
                 .padding(.top, 2)
         }
+        #else
+        settingsControls
+            .padding(.top, 2)
+        #endif
     }
 
     private var settingsControls: some View {
@@ -1111,6 +1143,7 @@ private struct GlassCapsuleModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             content
                 .glassEffect()
@@ -1119,6 +1152,10 @@ private struct GlassCapsuleModifier: ViewModifier {
             content
                 .liquidGlassCapsule()
         }
+        #else
+        content
+            .liquidGlassCapsule()
+        #endif
     }
 }
 
