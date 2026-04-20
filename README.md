@@ -128,6 +128,7 @@ git push origin v0.1.0
 3. Actions 会自动生成可下载文件：
    - Release Assets：`伊莉丝Codex账户监控助手.dmg`
    - Workflow Artifacts：`macos-app-bundle-and-dmg`（包含 `.app` 与 `.dmg`）
+   - 产物默认包含 `arm64 + x86_64` 通用二进制，可直接运行在 Apple Silicon 和 Intel Mac 上
 
 ## 本地打包
 
@@ -139,3 +140,10 @@ scripts/build_macos_app.sh
 
 - `伊莉丝Codex账户监控助手.app`
 - `伊莉丝Codex账户监控助手.dmg`
+
+默认产出 `arm64 + x86_64` 通用包；如果你只想打单架构，可以显式指定：
+
+```bash
+BUILD_ARCHS="arm64" scripts/build_macos_app.sh
+BUILD_ARCHS="x86_64" scripts/build_macos_app.sh
+```

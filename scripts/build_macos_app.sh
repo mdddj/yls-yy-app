@@ -8,6 +8,7 @@ BUNDLE_ID="${BUNDLE_ID:-com.yls.codex-monitor}"
 APP_VERSION="${APP_VERSION:-0.1.0}"
 APP_BUILD="${APP_BUILD:-1}"
 ICON_SOURCE_REL="${ICON_SOURCE_REL:-images/yls_logo.png}"
+BUILD_ARCHS="${BUILD_ARCHS:-arm64 x86_64}"
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -23,7 +24,46 @@ DMG_PATH="$DIST_DIR/${APP_BUNDLE_NAME}.dmg"
 
 cd "$ROOT_DIR"
 
-swift build -c release
+read -r -a BUILD_ARCH_ARRAY <<< "$BUILD_ARCHS"
+if [[ "${#BUILD_ARCH_ARRAY[@]}" -eq 0 ]]; then
+  echo "BUILD_ARCHS must contain at least one architecture" >&2
+  exit 1
+fi
+
+SWIFT_BUILD_ARGS=(-c release)
+for arch in "${BUILD_ARCH_ARRAY[@]}"; do
+  SWIFT_BUILD_ARGS+=(--arch "$arch")
+done
+
+echo "Building release binary for architectures: ${BUILD_ARCH_ARRAY[*]}"
+swift build "${SWIFT_BUILD_ARGS[@]}"
+
+BINARY_PATH=""
+if [[ "${#BUILD_ARCH_ARRAY[@]}" -gt 1 ]]; then
+  UNIVERSAL_BINARY_PATH=".build/apple/Products/Release/$EXECUTABLE_NAME"
+  if [[ -f "$UNIVERSAL_BINARY_PATH" ]]; then
+    BINARY_PATH="$UNIVERSAL_BINARY_PATH"
+  fi
+fi
+
+if [[ -z "$BINARY_PATH" ]]; then
+  for arch in "${BUILD_ARCH_ARRAY[@]}"; do
+    CANDIDATE=".build/${arch}-apple-macosx/release/$EXECUTABLE_NAME"
+    if [[ -f "$CANDIDATE" ]]; then
+      BINARY_PATH="$CANDIDATE"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$BINARY_PATH" && -f ".build/release/$EXECUTABLE_NAME" ]]; then
+  BINARY_PATH=".build/release/$EXECUTABLE_NAME"
+fi
+
+if [[ -z "$BINARY_PATH" ]]; then
+  echo "Release binary not found for architectures: ${BUILD_ARCH_ARRAY[*]}" >&2
+  exit 1
+fi
 
 if [[ ! -f "$ICON_SOURCE" ]]; then
   echo "Icon source not found: $ICON_SOURCE" >&2
@@ -34,7 +74,7 @@ rm -rf "$APP_DIR" "$DMG_PATH" "$ICONSET_DIR"
 rm -f "$DIST_DIR/${APP_BUNDLE_NAME}.zip"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 
-cp ".build/release/$EXECUTABLE_NAME" "$APP_MACOS/$EXECUTABLE_NAME"
+cp "$BINARY_PATH" "$APP_MACOS/$EXECUTABLE_NAME"
 chmod +x "$APP_MACOS/$EXECUTABLE_NAME"
 
 mkdir -p "$ICONSET_DIR"
@@ -94,3 +134,5 @@ hdiutil create \
 
 echo "App bundle: $APP_DIR"
 echo "DMG package: $DMG_PATH"
+echo "Binary source: $BINARY_PATH"
+echo "Packaged architectures: $(lipo -archs "$APP_MACOS/$EXECUTABLE_NAME")"

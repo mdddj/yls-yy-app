@@ -13,5 +13,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Swift build
-        run: swift build
+      - name: Swift build universal binary
+        run: swift build -c release --arch arm64 --arch x86_64
+
+      - name: Verify universal binary
+        run: |
+          ARCHS="$(lipo -archs .build/apple/Products/Release/yls-yy-app)"
+          echo "Built architectures: $ARCHS"
+          [[ "$ARCHS" == *"arm64"* && "$ARCHS" == *"x86_64"* ]]

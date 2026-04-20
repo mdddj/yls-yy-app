@@ -1113,7 +1113,7 @@ private struct GlassCapsuleModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
             content
-                .glassEffect(.regular.interactive(), in: Capsule())
+                .glassEffect()
                 .glassEffectID(id, in: glassNamespace)
         } else {
             content
