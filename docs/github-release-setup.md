@@ -69,16 +69,14 @@ find ~/Library/Developer/Xcode/DerivedData -path '*Sparkle/bin/generate_keys' | 
 
 ## GitHub Secrets 要配什么
 
-仓库 `Settings > Secrets and variables > Actions` 里至少加这两个：
+仓库 `Settings > Secrets and variables > Actions` 里现在只需要加这个：
 
-- `SPARKLE_PUBLIC_ED_KEY`
-  值就是 `generate_keys` 打印出来的公钥字符串
 - `SPARKLE_PRIVATE_KEY`
   值就是你导出的私钥文件内容
 
 说明：
 
-- `SPARKLE_PUBLIC_ED_KEY` 不敏感，但放 secret 里管理最省事
+- `SPARKLE_PUBLIC_ED_KEY` 已经写进工程构建设置，跟随代码一起发布
 - `SPARKLE_PRIVATE_KEY` 是敏感信息，绝对不要进仓库
 
 ## 首次启用 Pages

@@ -29,6 +29,7 @@
 - `SPARKLE_PUBLIC_ED_KEY`
 - `SPARKLE_FEED_URL`
 
+当前 `SPARKLE_PUBLIC_ED_KEY` 已经写入工程。
 如果 `SPARKLE_FEED_URL` 为空，也可以在应用 UI 里单独配置更新源。
 
 ## GitHub 发布建议

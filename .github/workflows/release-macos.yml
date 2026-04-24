@@ -19,7 +19,6 @@ jobs:
     runs-on: macos-latest
     env:
       APPCAST_URL: https://mdddj.github.io/yls-yy-app/appcast.xml
-      SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
     steps:
       - name: Checkout
@@ -29,10 +28,6 @@ jobs:
 
       - name: Validate Sparkle secrets
         run: |
-          if [ -z "${SPARKLE_PUBLIC_ED_KEY}" ]; then
-            echo "::error::Missing repository secret SPARKLE_PUBLIC_ED_KEY"
-            exit 1
-          fi
           if [ -z "${SPARKLE_PRIVATE_KEY}" ]; then
             echo "::error::Missing repository secret SPARKLE_PRIVATE_KEY"
             exit 1
@@ -62,7 +57,6 @@ jobs:
             -scheme yls-app \
             -configuration Release \
             -derivedDataPath DerivedData \
-            SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY}" \
             SPARKLE_FEED_URL="${APPCAST_URL}" \
             build
 
