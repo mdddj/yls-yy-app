@@ -8,7 +8,6 @@ enum DefaultsKey {
     static let displayStyle = "status_display_style"
     static let mcpEnabled = "mcp_enabled"
     static let mcpPort = "mcp_port"
-    static let updateFeedURL = "update_feed_url"
 }
 
 enum AppMeta {
@@ -18,6 +17,7 @@ enum AppMeta {
     static let agiEnvironmentKey = "YLS_AGI_KEY"
     static let dashboardURL = URL(string: "https://code.ylsagi.com/user/dashboard")!
     static let pricingURL = URL(string: "https://code.ylsagi.com/pricing")!
+    static let appcastURL = URL(string: "https://mdddj.github.io/yls-yy-app/appcast.xml")!
     static let mcpHost = "127.0.0.1"
     static let defaultMCPPort: UInt16 = 8765
     static let preferredPanelWidth: CGFloat = 316
@@ -145,7 +145,6 @@ enum ConfigurationWindowKind: String, Identifiable, CaseIterable {
     case agiKey
     case interval
     case mcp
-    case updates
 
     var id: String { rawValue }
 
@@ -159,8 +158,6 @@ enum ConfigurationWindowKind: String, Identifiable, CaseIterable {
             "设置轮询间隔"
         case .mcp:
             "MCP 服务设置"
-        case .updates:
-            "更新设置"
         }
     }
 
@@ -172,8 +169,6 @@ enum ConfigurationWindowKind: String, Identifiable, CaseIterable {
             CGSize(width: 340, height: 170)
         case .mcp:
             CGSize(width: 420, height: 240)
-        case .updates:
-            CGSize(width: 520, height: 300)
         }
     }
 }

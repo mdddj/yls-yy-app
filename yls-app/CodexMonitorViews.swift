@@ -39,10 +39,8 @@ struct CodexMonitorMenuBarContent: View {
             onSelectDisplayStyle: store.selectDisplayStyle,
             onConfigureMCP: { openConfigurationWindow(.mcp) },
             updateCheckStatusText: appUpdater.checkButtonSubtitle,
-            updateFeedStatusText: appUpdater.feedButtonSubtitle,
             canCheckForUpdates: appUpdater.canCheckForUpdates,
             onCheckForUpdates: appUpdater.checkForUpdates,
-            onConfigureUpdates: { openConfigurationWindow(.updates) },
             onQuit: store.quit
         )
         .alert(
@@ -431,10 +429,8 @@ struct LiquidGlassSummaryPanel: View {
     let onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)?
     let onConfigureMCP: (() -> Void)?
     let updateCheckStatusText: String
-    let updateFeedStatusText: String
     let canCheckForUpdates: Bool
     let onCheckForUpdates: (() -> Void)?
-    let onConfigureUpdates: (() -> Void)?
     let onQuit: (() -> Void)?
 
     @Namespace private var glassNamespace
@@ -1079,16 +1075,6 @@ struct LiquidGlassSummaryPanel: View {
             )
 
             MenuActionButton(
-                title: "更新设置",
-                subtitle: updateFeedStatusText,
-                systemImage: "square.and.arrow.down",
-                shortcut: nil,
-                prominent: false,
-                action: onConfigureUpdates,
-                useInfoCardBackground: true
-            )
-
-            MenuActionButton(
                 title: "立即刷新",
                 subtitle: nil,
                 systemImage: "arrow.clockwise",
@@ -1496,77 +1482,6 @@ struct MCPEditorSheet: View {
     }
 }
 
-struct UpdateFeedEditorSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var feedURL: String
-
-    let publicKeyStatusText: String
-    let onSave: (String) -> Bool
-
-    init(
-        initialFeedURL: String,
-        publicKeyStatusText: String,
-        onSave: @escaping (String) -> Bool
-    ) {
-        _feedURL = State(initialValue: initialFeedURL)
-        self.publicKeyStatusText = publicKeyStatusText
-        self.onSave = onSave
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("更新设置")
-                .font(.title3.bold())
-
-            Text("这里填写 Sparkle 的 appcast 地址。GitHub Release 本身不够，还需要额外发布 appcast.xml。")
-                .foregroundStyle(.secondary)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Appcast URL")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                TextField("https://example.com/appcast.xml", text: $feedURL)
-                    .textFieldStyle(.roundedBorder)
-                    .textSelection(.enabled)
-
-                Text("示例: https://<你的域名或 github-pages>/appcast.xml")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Sparkle 公钥")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Text(publicKeyStatusText)
-                    .font(.body.weight(.semibold))
-
-                Text("公钥不是运行时输入项，需要在构建设置里注入 SPARKLE_PUBLIC_ED_KEY。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Spacer()
-                Button("取消") {
-                    dismiss()
-                }
-                Button("保存") {
-                    if onSave(feedURL) {
-                        dismiss()
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(20)
-        .frame(width: 520)
-    }
-}
-
 struct MonitorPreviewGallery: View {
     private let previewModels: [StatusSummaryViewModel] = [
         .previewOnline,
@@ -1622,10 +1537,8 @@ struct MonitorPreviewGallery: View {
                             onSelectDisplayStyle: nil,
                             onConfigureMCP: nil,
                             updateCheckStatusText: "已就绪",
-                            updateFeedStatusText: "example.com/appcast.xml",
                             canCheckForUpdates: true,
                             onCheckForUpdates: nil,
-                            onConfigureUpdates: nil,
                             onQuit: nil
                         )
                     }
@@ -1715,10 +1628,8 @@ private struct PreviewControlCenterBackdrop: View {
         onSelectDisplayStyle: nil,
         onConfigureMCP: nil,
         updateCheckStatusText: "已就绪",
-        updateFeedStatusText: "example.com/appcast.xml",
         canCheckForUpdates: true,
         onCheckForUpdates: nil,
-        onConfigureUpdates: nil,
         onQuit: nil
     )
 }

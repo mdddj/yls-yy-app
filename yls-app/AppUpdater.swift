@@ -5,13 +5,9 @@ import Sparkle
 @MainActor
 final class AppUpdater: NSObject, ObservableObject {
     @Published private(set) var canCheckForUpdates = false
-    @Published private(set) var feedURLString: String
     @Published private(set) var checkButtonSubtitle = "未配置更新源"
-    @Published private(set) var feedButtonSubtitle = "未配置"
-    @Published private(set) var publicKeyStatusText = "未注入"
     @Published var errorMessage: String?
 
-    private let defaults: UserDefaults
     private var hasBootstrapped = false
     private var hasStartedUpdater = false
     private var lastCycleMessage: String?
@@ -35,16 +31,9 @@ final class AppUpdater: NSObject, ObservableObject {
         return controller
     }()
 
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        self.feedURLString = defaults.string(forKey: DefaultsKey.updateFeedURL)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    override init() {
         super.init()
         refreshUIState()
-    }
-
-    var currentFeedURLValue: String {
-        feedURLString
     }
 
     func bootstrapIfNeeded() {
@@ -52,34 +41,6 @@ final class AppUpdater: NSObject, ObservableObject {
         hasBootstrapped = true
         _ = updaterController
         startUpdaterIfPossible()
-    }
-
-    @discardableResult
-    func saveFeedURL(_ value: String) -> Bool {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            guard let url = URL(string: trimmed),
-                  let scheme = url.scheme?.lowercased(),
-                  ["http", "https"].contains(scheme),
-                  url.host?.isEmpty == false
-            else {
-                errorMessage = "更新源必须是有效的 http(s) appcast 地址"
-                return false
-            }
-        }
-
-        feedURLString = trimmed
-        defaults.set(trimmed, forKey: DefaultsKey.updateFeedURL)
-        lastCycleMessage = nil
-
-        if hasStartedUpdater {
-            updaterController.updater.resetUpdateCycleAfterShortDelay()
-        } else {
-            startUpdaterIfPossible()
-        }
-
-        refreshUIState()
-        return true
     }
 
     func checkForUpdates() {
@@ -108,20 +69,16 @@ final class AppUpdater: NSObject, ObservableObject {
     }
 
     private var bundleFeedURLString: String {
-        (Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String)?
+        let injectedValue = (Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    private var effectiveFeedURLString: String {
-        if !feedURLString.isEmpty {
-            return feedURLString
+        if !injectedValue.isEmpty {
+            return injectedValue
         }
-        return bundleFeedURLString
+        return AppMeta.appcastURL.absoluteString
     }
 
     private var effectiveFeedURL: URL? {
-        guard !effectiveFeedURLString.isEmpty else { return nil }
-        return URL(string: effectiveFeedURLString)
+        URL(string: bundleFeedURLString)
     }
 
     private var sparklePublicKey: String {
@@ -161,16 +118,6 @@ final class AppUpdater: NSObject, ObservableObject {
     }
 
     private func refreshUIState() {
-        publicKeyStatusText = hasPublicKey ? "已注入" : "未注入"
-
-        if let url = effectiveFeedURL {
-            let host = url.host ?? url.absoluteString
-            let path = url.path.isEmpty ? "" : url.path
-            feedButtonSubtitle = "\(host)\(path)"
-        } else {
-            feedButtonSubtitle = "未配置"
-        }
-
         if !hasPublicKey {
             checkButtonSubtitle = "缺少公钥"
             canCheckForUpdates = false
@@ -198,7 +145,7 @@ final class AppUpdater: NSObject, ObservableObject {
 
 extension AppUpdater: SPUUpdaterDelegate {
     func feedURLString(for updater: SPUUpdater) -> String? {
-        effectiveFeedURLString.isEmpty ? nil : effectiveFeedURLString
+        bundleFeedURLString
     }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {

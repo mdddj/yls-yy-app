@@ -79,19 +79,5 @@ struct yls_appApp: App {
             height: ConfigurationWindowKind.mcp.defaultSize.height
         )
         .windowResizability(.contentSize)
-
-        Window(ConfigurationWindowKind.updates.title, id: ConfigurationWindowKind.updates.id) {
-            UpdateFeedEditorSheet(
-                initialFeedURL: appUpdater.currentFeedURLValue,
-                publicKeyStatusText: appUpdater.publicKeyStatusText
-            ) { value in
-                appUpdater.saveFeedURL(value)
-            }
-        }
-        .defaultSize(
-            width: ConfigurationWindowKind.updates.defaultSize.width,
-            height: ConfigurationWindowKind.updates.defaultSize.height
-        )
-        .windowResizability(.contentSize)
     }
 }

@@ -20,17 +20,38 @@ jobs:
     env:
       APPCAST_URL: https://mdddj.github.io/yls-yy-app/appcast.xml
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+      DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64 }}
+      DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Validate Sparkle secrets
+      - name: Validate release secrets
         run: |
           if [ -z "${SPARKLE_PRIVATE_KEY}" ]; then
             echo "::error::Missing repository secret SPARKLE_PRIVATE_KEY"
             exit 1
+          fi
+
+      - name: Resolve signing mode
+        id: signing_mode
+        run: |
+          if [ -n "${APPLE_TEAM_ID}" ] && \
+             [ -n "${APP_STORE_CONNECT_API_KEY_ID}" ] && \
+             [ -n "${APP_STORE_CONNECT_API_ISSUER_ID}" ] && \
+             [ -n "${APP_STORE_CONNECT_API_KEY_BASE64}" ] && \
+             [ -n "${DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64}" ] && \
+             [ -n "${DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Developer ID / notarization secrets are incomplete. Falling back to an unsigned test build."
           fi
 
       - name: Show Xcode version
@@ -50,22 +71,150 @@ jobs:
           echo "archive_name=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
           echo "notes_basename=${NOTES_BASENAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Build release app
+      - name: Install Developer ID certificate
+        id: signing
+        if: steps.signing_mode.outputs.enabled == 'true'
+        run: |
+          CERT_PATH="${RUNNER_TEMP}/developer-id-application.p12"
+          KEYCHAIN_PATH="${RUNNER_TEMP}/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+
+          printf '%s' "${DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64}" | base64 --decode > "${CERT_PATH}"
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERT_PATH}" \
+            -k "${KEYCHAIN_PATH}" \
+            -P "${DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD}" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -T /usr/bin/productbuild \
+            -T /usr/bin/xcodebuild
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}"
+          security default-keychain -d user -s "${KEYCHAIN_PATH}"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
+
+          echo "keychain_path=${KEYCHAIN_PATH}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install App Store Connect API key
+        id: appstoreconnect
+        if: steps.signing_mode.outputs.enabled == 'true'
+        run: |
+          KEY_PATH="${RUNNER_TEMP}/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          printf '%s' "${APP_STORE_CONNECT_API_KEY_BASE64}" | base64 --decode > "${KEY_PATH}"
+          chmod 600 "${KEY_PATH}"
+          echo "key_path=${KEY_PATH}" >> "${GITHUB_OUTPUT}"
+
+      - name: Archive signed app
+        if: steps.signing_mode.outputs.enabled == 'true'
         run: |
           xcodebuild \
             -project yls-app.xcodeproj \
             -scheme yls-app \
             -configuration Release \
+            -destination "generic/platform=macOS" \
+            -archivePath "${RUNNER_TEMP}/yls-app.xcarchive" \
+            -derivedDataPath DerivedData \
+            DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" \
+            SPARKLE_FEED_URL="${APPCAST_URL}" \
+            OTHER_CODE_SIGN_FLAGS="--keychain ${{ steps.signing.outputs.keychain_path }}" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "${{ steps.appstoreconnect.outputs.key_path }}" \
+            -authenticationKeyID "${APP_STORE_CONNECT_API_KEY_ID}" \
+            -authenticationKeyIssuerID "${APP_STORE_CONNECT_API_ISSUER_ID}" \
+            clean archive
+
+      - name: Export Developer ID app
+        if: steps.signing_mode.outputs.enabled == 'true'
+        run: |
+          EXPORT_OPTIONS_PLIST="${RUNNER_TEMP}/ExportOptions.plist"
+
+          cat > "${EXPORT_OPTIONS_PLIST}" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>destination</key>
+            <string>export</string>
+            <key>method</key>
+            <string>developer-id</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+          </dict>
+          </plist>
+          EOF
+
+          xcodebuild -exportArchive \
+            -archivePath "${RUNNER_TEMP}/yls-app.xcarchive" \
+            -exportPath "${RUNNER_TEMP}/exported-app" \
+            -exportOptionsPlist "${EXPORT_OPTIONS_PLIST}" \
+            OTHER_CODE_SIGN_FLAGS="--keychain ${{ steps.signing.outputs.keychain_path }}" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "${{ steps.appstoreconnect.outputs.key_path }}" \
+            -authenticationKeyID "${APP_STORE_CONNECT_API_KEY_ID}" \
+            -authenticationKeyIssuerID "${APP_STORE_CONNECT_API_ISSUER_ID}"
+
+      - name: Verify code signing
+        if: steps.signing_mode.outputs.enabled == 'true'
+        run: |
+          APP_PATH="${RUNNER_TEMP}/exported-app/yls-app.app"
+          codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+
+      - name: Notarize app
+        if: steps.signing_mode.outputs.enabled == 'true'
+        run: |
+          APP_PATH="${RUNNER_TEMP}/exported-app/yls-app.app"
+          NOTARY_ARCHIVE="${RUNNER_TEMP}/${{ steps.version.outputs.notes_basename }}-notary.zip"
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "${APP_PATH}" \
+            "${NOTARY_ARCHIVE}"
+
+          xcrun notarytool submit "${NOTARY_ARCHIVE}" \
+            --key "${{ steps.appstoreconnect.outputs.key_path }}" \
+            --key-id "${APP_STORE_CONNECT_API_KEY_ID}" \
+            --issuer "${APP_STORE_CONNECT_API_ISSUER_ID}" \
+            --wait
+
+      - name: Staple notarization ticket
+        if: steps.signing_mode.outputs.enabled == 'true'
+        run: |
+          APP_PATH="${RUNNER_TEMP}/exported-app/yls-app.app"
+          xcrun stapler staple "${APP_PATH}"
+          xcrun stapler validate "${APP_PATH}"
+          spctl -a -vvv -t install "${APP_PATH}"
+
+      - name: Build fallback release app
+        if: steps.signing_mode.outputs.enabled != 'true'
+        run: |
+          xcodebuild \
+            -project yls-app.xcodeproj \
+            -scheme yls-app \
+            -configuration Release \
+            -destination "generic/platform=macOS" \
             -derivedDataPath DerivedData \
             SPARKLE_FEED_URL="${APPCAST_URL}" \
-            build
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
 
       - name: Package app
         run: |
           mkdir -p dist appcast-src pages
+          if [ "${{ steps.signing_mode.outputs.enabled }}" = "true" ]; then
+            APP_PATH="${RUNNER_TEMP}/exported-app/yls-app.app"
+          else
+            APP_PATH="DerivedData/Build/Products/Release/yls-app.app"
+          fi
 
           ditto -c -k --sequesterRsrc --keepParent \
-            "DerivedData/Build/Products/Release/yls-app.app" \
+            "${APP_PATH}" \
             "dist/${{ steps.version.outputs.archive_name }}"
 
           cp "dist/${{ steps.version.outputs.archive_name }}" appcast-src/
@@ -111,6 +260,12 @@ jobs:
 
       - name: Build Pages index
         run: |
+          if [ "${{ steps.signing_mode.outputs.enabled }}" = "true" ]; then
+            BUILD_MODE_TEXT="发布产物已完成 Developer ID 签名、Apple notarization 和 stapler。"
+          else
+            BUILD_MODE_TEXT="当前仓库尚未配置 Developer ID / notarization Secret，本次为可下载测试包。"
+          fi
+
           cat > pages/index.html <<EOF
           <!doctype html>
           <html lang="zh-CN">
@@ -127,6 +282,7 @@ jobs:
           <body>
             <h1>yls-yy-app 更新源</h1>
             <p>最新标签: <code>${GITHUB_REF_NAME}</code></p>
+            <p>${BUILD_MODE_TEXT}</p>
             <p>Appcast: <a href="./appcast.xml">appcast.xml</a></p>
             <p>GitHub Release: <a href="https://github.com/${{ github.repository }}/releases/tag/${GITHUB_REF_NAME}">${GITHUB_REF_NAME}</a></p>
           </body>
@@ -137,6 +293,12 @@ jobs:
         uses: actions/upload-pages-artifact@v4
         with:
           path: pages
+
+      - name: Cleanup signing assets
+        if: always() && steps.signing_mode.outputs.enabled == 'true'
+        run: |
+          rm -f "${{ steps.appstoreconnect.outputs.key_path }}" || true
+          security delete-keychain "${{ steps.signing.outputs.keychain_path }}" || true
 
   deploy-pages:
     needs: build
