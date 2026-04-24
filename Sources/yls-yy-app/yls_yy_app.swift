@@ -1206,7 +1206,9 @@ private struct LiquidGlassSummaryPanel: View {
     }
 
     private var shouldShowHeaderPanelToggle: Bool {
-        model.panelMode == .settings || !model.canToggleEmail
+        model.panelMode == .settings
+            || model.statisticsDisplayMode == .dual
+            || !model.canToggleEmail
     }
 
     private var metaRow: some View {
