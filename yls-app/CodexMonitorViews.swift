@@ -38,9 +38,12 @@ struct CodexMonitorMenuBarContent: View {
             onOpenPricing: { openURL(AppMeta.pricingURL) },
             onSelectDisplayStyle: store.selectDisplayStyle,
             onConfigureMCP: { openConfigurationWindow(.mcp) },
+            hasAvailableUpdate: appUpdater.hasAvailableUpdate,
+            availableUpdateVersion: appUpdater.availableUpdateVersion,
             updateCheckStatusText: appUpdater.checkButtonSubtitle,
             canCheckForUpdates: appUpdater.canCheckForUpdates,
             onCheckForUpdates: appUpdater.checkForUpdates,
+            onOpenAvailableUpdate: appUpdater.openAvailableUpdate,
             onQuit: store.quit
         )
         .alert(
@@ -66,11 +69,10 @@ struct CodexMonitorMenuBarContent: View {
     }
 
     private var activeErrorMessage: String? {
-        appUpdater.errorMessage ?? store.errorMessage
+        store.errorMessage
     }
 
     private func dismissErrors() {
-        appUpdater.dismissError()
         store.dismissError()
     }
 
@@ -428,9 +430,12 @@ struct LiquidGlassSummaryPanel: View {
     let onOpenPricing: (() -> Void)?
     let onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)?
     let onConfigureMCP: (() -> Void)?
+    let hasAvailableUpdate: Bool
+    let availableUpdateVersion: String
     let updateCheckStatusText: String
     let canCheckForUpdates: Bool
     let onCheckForUpdates: (() -> Void)?
+    let onOpenAvailableUpdate: (() -> Void)?
     let onQuit: (() -> Void)?
 
     @Namespace private var glassNamespace
@@ -449,6 +454,10 @@ struct LiquidGlassSummaryPanel: View {
         .padding(12)
         .frame(width: AppMeta.preferredPanelWidth)
         .fixedSize(horizontal: false, vertical: true)
+        .animation(
+            reduceMotion ? nil : .spring(duration: 0.28, bounce: 0.18),
+            value: hasAvailableUpdate
+        )
     }
 
     private var statisticsPage: some View {
@@ -532,6 +541,11 @@ struct LiquidGlassSummaryPanel: View {
                     action: isRefreshableStatus(model.statusTone) ? onRefresh : nil
                 )
 
+                if hasAvailableUpdate {
+                    availableUpdateButton(size: 30)
+                        .transition(.scale(scale: 0.92).combined(with: .opacity))
+                }
+
                 if shouldShowHeaderPanelToggle {
                     Button(action: togglePanelMode) {
                         Image(systemName: model.panelMode.toggleSymbol)
@@ -605,6 +619,11 @@ struct LiquidGlassSummaryPanel: View {
             .frame(height: 26)
             .fixedSize(horizontal: true, vertical: false)
             .modifier(GlassCapsuleModifier(glassNamespace: glassNamespace, id: "email-pill"))
+
+            if hasAvailableUpdate {
+                availableUpdateButton(size: 26)
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+            }
 
             Button(action: togglePanelMode) {
                 Image(systemName: model.panelMode.toggleSymbol)
@@ -906,6 +925,48 @@ struct LiquidGlassSummaryPanel: View {
             .clipShape(Capsule())
     }
 
+    private func availableUpdateButton(size: CGFloat) -> some View {
+        Button(action: { onOpenAvailableUpdate?() }) {
+            ZStack(alignment: .topTrailing) {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.orange.opacity(0.96),
+                                Color.red.opacity(0.86),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay {
+                        Circle().stroke(Color.white.opacity(0.34), lineWidth: 0.9)
+                    }
+                    .shadow(color: Color.orange.opacity(0.34), radius: 12, y: 5)
+
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: size * 0.47, weight: .bold))
+                    .foregroundStyle(.white)
+
+                Circle()
+                    .fill(.white)
+                    .frame(width: max(6, size * 0.22), height: max(6, size * 0.22))
+                    .overlay {
+                        Circle().stroke(Color.red.opacity(0.30), lineWidth: 0.7)
+                    }
+                    .offset(x: size * 0.02, y: -size * 0.02)
+            }
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(
+            availableUpdateVersion.isEmpty
+                ? "发现新版本，点击升级"
+                : "发现新版本 \(availableUpdateVersion)，点击升级"
+        )
+    }
+
     @ViewBuilder
     private func statusBadge(
         text: String,
@@ -1043,68 +1104,70 @@ struct LiquidGlassSummaryPanel: View {
                 useInfoCardBackground: true
             )
 
-            MenuActionButton(
-                title: "轮询间隔",
-                subtitle: model.pollIntervalText,
-                systemImage: "timer",
-                shortcut: "⌘I",
-                prominent: false,
-                action: onSetInterval,
-                useInfoCardBackground: true
-            )
+            if model.hasAPIKey {
+                MenuActionButton(
+                    title: "轮询间隔",
+                    subtitle: model.pollIntervalText,
+                    systemImage: "timer",
+                    shortcut: "⌘I",
+                    prominent: false,
+                    action: onSetInterval,
+                    useInfoCardBackground: true
+                )
 
-            MenuActionButton(
-                title: "MCP 服务",
-                subtitle: model.mcpStatusText,
-                systemImage: "server.rack",
-                shortcut: nil,
-                prominent: false,
-                action: onConfigureMCP,
-                useInfoCardBackground: true
-            )
+                MenuActionButton(
+                    title: "MCP 服务",
+                    subtitle: model.mcpStatusText,
+                    systemImage: "server.rack",
+                    shortcut: nil,
+                    prominent: false,
+                    action: onConfigureMCP,
+                    useInfoCardBackground: true
+                )
 
-            MenuActionButton(
-                title: "检查更新",
-                subtitle: updateCheckStatusText,
-                systemImage: "arrow.trianglehead.2.clockwise.rotate.90",
-                shortcut: nil,
-                prominent: false,
-                isEnabled: canCheckForUpdates,
-                action: onCheckForUpdates,
-                useInfoCardBackground: true
-            )
+                MenuActionButton(
+                    title: "检查更新",
+                    subtitle: updateCheckStatusText,
+                    systemImage: "arrow.trianglehead.2.clockwise.rotate.90",
+                    shortcut: nil,
+                    prominent: false,
+                    isEnabled: canCheckForUpdates,
+                    action: onCheckForUpdates,
+                    useInfoCardBackground: true
+                )
 
-            MenuActionButton(
-                title: "立即刷新",
-                subtitle: nil,
-                systemImage: "arrow.clockwise",
-                shortcut: "⌘R",
-                prominent: true,
-                action: onRefresh,
-                useInfoCardBackground: true
-            )
+                MenuActionButton(
+                    title: "立即刷新",
+                    subtitle: nil,
+                    systemImage: "arrow.clockwise",
+                    shortcut: "⌘R",
+                    prominent: true,
+                    action: onRefresh,
+                    useInfoCardBackground: true
+                )
 
-            MenuActionButton(
-                title: "打开伊莉丝控制台",
-                subtitle: nil,
-                systemImage: "safari",
-                shortcut: "⌘D",
-                prominent: false,
-                action: onOpenDashboard,
-                useInfoCardBackground: true
-            )
+                MenuActionButton(
+                    title: "打开伊莉丝控制台",
+                    subtitle: nil,
+                    systemImage: "safari",
+                    shortcut: "⌘D",
+                    prominent: false,
+                    action: onOpenDashboard,
+                    useInfoCardBackground: true
+                )
 
-            displayStyleSection
+                displayStyleSection
 
-            MenuActionButton(
-                title: "退出",
-                subtitle: nil,
-                systemImage: "power",
-                shortcut: "⌘Q",
-                prominent: false,
-                action: onQuit,
-                useInfoCardBackground: true
-            )
+                MenuActionButton(
+                    title: "退出",
+                    subtitle: nil,
+                    systemImage: "power",
+                    shortcut: "⌘Q",
+                    prominent: false,
+                    action: onQuit,
+                    useInfoCardBackground: true
+                )
+            }
         }
     }
 
@@ -1536,9 +1599,12 @@ struct MonitorPreviewGallery: View {
                             onOpenPricing: nil,
                             onSelectDisplayStyle: nil,
                             onConfigureMCP: nil,
+                            hasAvailableUpdate: true,
+                            availableUpdateVersion: "1.0.7",
                             updateCheckStatusText: "已就绪",
                             canCheckForUpdates: true,
                             onCheckForUpdates: nil,
+                            onOpenAvailableUpdate: nil,
                             onQuit: nil
                         )
                     }
@@ -1627,9 +1693,12 @@ private struct PreviewControlCenterBackdrop: View {
         onOpenPricing: nil,
         onSelectDisplayStyle: nil,
         onConfigureMCP: nil,
+        hasAvailableUpdate: true,
+        availableUpdateVersion: "1.0.7",
         updateCheckStatusText: "已就绪",
         canCheckForUpdates: true,
         onCheckForUpdates: nil,
+        onOpenAvailableUpdate: nil,
         onQuit: nil
     )
 }

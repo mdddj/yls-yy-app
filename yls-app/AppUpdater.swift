@@ -6,7 +6,8 @@ import Sparkle
 final class AppUpdater: NSObject, ObservableObject {
     @Published private(set) var canCheckForUpdates = false
     @Published private(set) var checkButtonSubtitle = "未配置更新源"
-    @Published var errorMessage: String?
+    @Published private(set) var hasAvailableUpdate = false
+    @Published private(set) var availableUpdateVersion = ""
 
     private var hasBootstrapped = false
     private var hasStartedUpdater = false
@@ -17,7 +18,7 @@ final class AppUpdater: NSObject, ObservableObject {
         let controller = SPUStandardUpdaterController(
             startingUpdater: false,
             updaterDelegate: self,
-            userDriverDelegate: nil
+            userDriverDelegate: self
         )
 
         controller.updater.publisher(for: \.canCheckForUpdates)
@@ -46,26 +47,37 @@ final class AppUpdater: NSObject, ObservableObject {
     func checkForUpdates() {
         bootstrapIfNeeded()
 
-        if let issue = configurationIssueText {
-            errorMessage = issue
+        guard configurationIssueText == nil else {
             refreshUIState()
             return
         }
 
         startUpdaterIfPossible()
         guard canCheckForUpdates else {
-            errorMessage = "更新器尚未准备好，请稍后再试"
+            lastCycleMessage = "更新器未就绪"
             refreshUIState()
             return
         }
 
-        lastCycleMessage = "正在检查更新"
+        lastCycleMessage = "检查中"
         refreshUIState()
+        updaterController.updater.checkForUpdateInformation()
+    }
+
+    func openAvailableUpdate() {
+        bootstrapIfNeeded()
+
+        guard configurationIssueText == nil else {
+            refreshUIState()
+            return
+        }
+
+        startUpdaterIfPossible()
         updaterController.checkForUpdates(nil)
     }
 
     func dismissError() {
-        errorMessage = nil
+        // Updater no longer surfaces alert-based errors.
     }
 
     private var bundleFeedURLString: String {
@@ -111,7 +123,7 @@ final class AppUpdater: NSObject, ObservableObject {
         hasStartedUpdater = true
 
         if lastCycleMessage == nil {
-            lastCycleMessage = "自动检查已开启"
+            lastCycleMessage = "自动检查开启"
         }
 
         refreshUIState()
@@ -149,26 +161,95 @@ extension AppUpdater: SPUUpdaterDelegate {
     }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
-        let displayVersion = item.displayVersionString.isEmpty ? item.versionString : item.displayVersionString
-        lastCycleMessage = "发现新版本 \(displayVersion)"
+        markUpdateAvailable(item)
         refreshUIState()
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: any Error) {
-        lastCycleMessage = "当前已是最新版本"
+        clearAvailableUpdate()
+        lastCycleMessage = "已是最新"
         refreshUIState()
     }
 
     func updater(_ updater: SPUUpdater, didAbortWithError error: any Error) {
-        lastCycleMessage = "检查失败"
-        errorMessage = error.localizedDescription
+        lastCycleMessage = displayMessage(for: error)
         refreshUIState()
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
-        if error == nil, lastCycleMessage == "正在检查更新" {
-            lastCycleMessage = "已完成检查"
+        if error == nil, lastCycleMessage == "检查中" {
+            lastCycleMessage = "检查完成"
         }
         refreshUIState()
+    }
+
+    func updater(_ updater: SPUUpdater, userDidMake choice: SPUUserUpdateChoice, forUpdate updateItem: SUAppcastItem, state: SPUUserUpdateState) {
+        switch choice {
+        case .skip:
+            clearAvailableUpdate()
+            lastCycleMessage = "已忽略此版本"
+        case .install:
+            markUpdateAvailable(updateItem)
+            lastCycleMessage = "准备升级"
+        case .dismiss:
+            markUpdateAvailable(updateItem)
+            lastCycleMessage = "发现 \(availableUpdateVersion)"
+        @unknown default:
+            break
+        }
+
+        refreshUIState()
+    }
+}
+
+extension AppUpdater: SPUStandardUserDriverDelegate {
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
+        false
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
+        if !handleShowingUpdate || !state.userInitiated {
+            markUpdateAvailable(update)
+            refreshUIState()
+        }
+    }
+}
+
+private extension AppUpdater {
+    func markUpdateAvailable(_ item: SUAppcastItem) {
+        let displayVersion = item.displayVersionString.isEmpty ? item.versionString : item.displayVersionString
+        hasAvailableUpdate = true
+        availableUpdateVersion = displayVersion
+        lastCycleMessage = "发现 \(displayVersion)"
+    }
+
+    func clearAvailableUpdate() {
+        hasAvailableUpdate = false
+        availableUpdateVersion = ""
+    }
+
+    func displayMessage(for error: Error) -> String {
+        let nsError = error as NSError
+
+        if nsError.domain == SUSparkleErrorDomain {
+            switch nsError.code {
+            case 1:
+                return "缺少公钥"
+            case 4:
+                return "更新源无效"
+            case 1000, 1002:
+                return "更新源异常"
+            case 2001:
+                return "下载失败"
+            case 3001, 3002:
+                return "签名校验失败"
+            default:
+                break
+            }
+        }
+
+        return "检查失败"
     }
 }
