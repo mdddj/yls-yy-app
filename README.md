@@ -1,6 +1,6 @@
 # yls-yy-app
 
-一个原生 `macOS` 状态栏应用（Menu Bar App），用于轮询接口并显示余额信息。
+一个原生 `macOS` 状态栏应用（Menu Bar App），用于轮询不同套餐接口并显示余额信息。
 
 ## 应用展示
 
@@ -16,19 +16,27 @@
 ## 功能
 
 - 每隔 N 秒轮询接口（可配置）
-- 可在菜单中配置 `API Key`
+- 可在菜单中分别配置 `Codex API Key` 和 `AGI API Key`
+- 可在菜单中切换统计模式：`单显` / `双显`
+- 可在菜单中切换单显时的展示数据源（`Codex` / `AGI`）
+- 双显模式会同时显示 `Codex` 和 `AGI` 两组统计，并支持点击分组展开/收起
+- 状态栏默认优先显示 `Codex` 套餐；若 `Codex` 未配置则回退显示可用数据源
 - 状态栏直接显示剩余额度（`remaining_quota`）
 - 启动时自动拉起本地 MCP 快照服务，供 AI 连接读取最新数据
 - 菜单显示：
-  - 套餐用量（`state.userPackgeUsage`）
-  - 剩余额度（`state.remaining_quota`）
+  - 当前数据源或双显分组的套餐用量
+  - 当前数据源或双显分组的剩余额度
   - 最后更新时间/错误信息
   - MCP 服务状态与地址
 
 ## 接口
 
-- `GET https://codex.ylsagi.com/codex/info`
-- Header: `Authorization: Bearer <apiKey>`
+- `Codex`
+  - `GET https://codex.ylsagi.com/codex/info`
+  - Header: `Authorization: Bearer <codexApiKey>`
+- `AGI`
+  - `GET https://api.ylsagi.com/user/package`
+  - Header: `Authorization: Bearer <agiApiKey>`
 
 ## 运行
 
@@ -38,7 +46,10 @@ swift run
 
 运行后可在 macOS 顶部状态栏看到应用，点击图标菜单进行：
 
-- `设置 API Key...`
+- `选择统计模式...`
+- `选择单显套餐源...`
+- `设置 Codex API Key...`
+- `设置 AGI API Key...`
 - `设置轮询间隔...`
 - `立即刷新`
 
@@ -53,7 +64,7 @@ swift run
 - 这是无主窗口应用，不会打开普通窗口。
 - 配置保存在 `UserDefaults` 中（本机本用户）。
 - 默认会在本机启动 HTTP 服务：`http://127.0.0.1:8765/mcp/snapshot`
-- AI 或其他本地工具可以读取这个地址，拿到当前余额、用量、套餐到期时间、轮询间隔等最新快照数据。
+- AI 或其他本地工具可以读取这个地址，拿到当前数据源的余额、用量、套餐到期时间、轮询间隔等最新快照数据。
 
 ### MCP 快照接口
 

@@ -5,6 +5,10 @@ import SwiftUI
 
 private enum DefaultsKey {
     static let apiKey = "api_key"
+    static let codexAPIKey = "codex_api_key"
+    static let agiAPIKey = "agi_api_key"
+    static let selectedSource = "selected_source"
+    static let statisticsDisplayMode = "statistics_display_mode"
     static let interval = "poll_interval_seconds"
     static let displayStyle = "status_display_style"
     static let mcpEnabled = "mcp_enabled"
@@ -12,9 +16,7 @@ private enum DefaultsKey {
 }
 
 private enum AppMeta {
-    static let displayName = "伊莉丝Codex账户监控助手"
-    static let dashboardURL = "https://code.ylsagi.com/user/dashboard"
-    static let pricingURL = "https://code.ylsagi.com/pricing"
+    static let displayName = "伊莉丝账户监控助手"
     static let mcpHost = "127.0.0.1"
     static let defaultMCPPort: UInt16 = 8765
     static let stackedStatusMinWidth: CGFloat = 44
@@ -32,6 +34,127 @@ private enum AppMeta {
     static let circleLineGap: CGFloat = 1
     static let circleLineWidth: CGFloat = 1.8
     static let circleDiameter: CGFloat = 13
+}
+
+private enum PackageSource: String, CaseIterable {
+    case codex
+    case agi
+
+    var title: String {
+        switch self {
+        case .codex:
+            return "Codex 套餐"
+        case .agi:
+            return "AGI 套餐"
+        }
+    }
+
+    var chipTitle: String {
+        switch self {
+        case .codex:
+            return "Codex"
+        case .agi:
+            return "AGI"
+        }
+    }
+
+    var settingsTitle: String {
+        switch self {
+        case .codex:
+            return "Codex"
+        case .agi:
+            return "AGI"
+        }
+    }
+
+    var endpoint: URL {
+        switch self {
+        case .codex:
+            return URL(string: "https://codex.ylsagi.com/codex/info")!
+        case .agi:
+            return URL(string: "https://api.ylsagi.com/user/package")!
+        }
+    }
+
+    var dashboardURL: String? {
+        switch self {
+        case .codex:
+            return "https://code.ylsagi.com/user/dashboard"
+        case .agi:
+            return nil
+        }
+    }
+
+    var pricingURL: String? {
+        switch self {
+        case .codex:
+            return "https://code.ylsagi.com/pricing"
+        case .agi:
+            return nil
+        }
+    }
+
+    var apiKeyDefaultsKey: String {
+        switch self {
+        case .codex:
+            return DefaultsKey.codexAPIKey
+        case .agi:
+            return DefaultsKey.agiAPIKey
+        }
+    }
+
+    var legacyDefaultsKey: String? {
+        switch self {
+        case .codex:
+            return DefaultsKey.apiKey
+        case .agi:
+            return nil
+        }
+    }
+
+    var environmentVariableCandidates: [String] {
+        switch self {
+        case .codex:
+            return ["YLS_CODEX", "YLS_CODEX_KEY", "YLS_CODEX_TOKEN", "YLS_API_KEY"]
+        case .agi:
+            return ["YLS_AGI_KEY", "YLS_AGI", "YLS_AGI_TOKEN"]
+        }
+    }
+
+    var keyButtonTitle: String {
+        switch self {
+        case .codex:
+            return "Codex API Key"
+        case .agi:
+            return "AGI API Key"
+        }
+    }
+
+    var apiKeyDialogTitle: String { "设置 \(settingsTitle) API Key" }
+
+    var apiKeyDialogHint: String {
+        "请输入 \(settingsTitle) Bearer Token（只填 token 本体）"
+    }
+
+    var openDashboardTitle: String {
+        switch self {
+        case .codex:
+            return "打开 Codex 控制台"
+        case .agi:
+            return "打开套餐控制台"
+        }
+    }
+}
+
+private enum APIKeyOrigin {
+    case userDefaults
+    case environment
+    case none
+}
+
+private struct APIKeyResolution {
+    let value: String
+    let origin: APIKeyOrigin
 }
 
 private enum StatusDisplayStyle: Int, CaseIterable {
@@ -134,6 +257,29 @@ private enum MenuPanelMode {
     }
 }
 
+private enum StatisticsDisplayMode: Int, CaseIterable {
+    case single = 0
+    case dual
+
+    var title: String {
+        switch self {
+        case .single:
+            return "单显"
+        case .dual:
+            return "双显"
+        }
+    }
+
+    var fullTitle: String {
+        switch self {
+        case .single:
+            return "单显模式"
+        case .dual:
+            return "双显模式"
+        }
+    }
+}
+
 private struct APIEnvelope: Decodable {
     let code: Int?
     let msg: String?
@@ -155,6 +301,67 @@ private struct APIState: Decodable {
         case userPackgeUsageWeek = "userPackgeUsage_week"
         case userPackgeUsage
         case remainingQuota = "remaining_quota"
+    }
+}
+
+private struct AGIAPIEnvelope: Decodable {
+    let code: Int?
+    let message: String?
+    let data: AGIData?
+}
+
+private struct AGIData: Decodable {
+    let packages: [AGIPackage]?
+    let summary: AGISummary?
+}
+
+private struct AGIPackage: Decodable {
+    let pkgID: String?
+    let orderClass: String?
+    let level: Int?
+    let byteTotal: FlexibleNumber?
+    let byteRemaining: FlexibleNumber?
+    let byteUsed: FlexibleNumber?
+    let day: Int?
+    let expireTime: String?
+    let createTime: String?
+    let reason: String?
+    let type: String?
+
+    enum CodingKeys: String, CodingKey {
+        case pkgID = "pkg_id"
+        case orderClass = "order_class"
+        case level
+        case byteTotal = "byte_total"
+        case byteRemaining = "byte_remaining"
+        case byteUsed = "byte_used"
+        case day
+        case expireTime
+        case createTime
+        case reason
+        case type
+    }
+}
+
+private struct AGISummary: Decodable {
+    let pkgID: String?
+    let totalPackages: Int?
+    let totalByte: FlexibleNumber?
+    let remainingByte: FlexibleNumber?
+    let usedByte: FlexibleNumber?
+    let highestLevel: Int?
+    let userType: String?
+    let latestExpireTime: String?
+
+    enum CodingKeys: String, CodingKey {
+        case pkgID = "pkg_id"
+        case totalPackages = "total_packages"
+        case totalByte = "total_byte"
+        case remainingByte = "remaining_byte"
+        case usedByte = "used_byte"
+        case highestLevel = "highest_level"
+        case userType = "user_type"
+        case latestExpireTime = "latest_expire_time"
     }
 }
 
@@ -256,7 +463,7 @@ private enum FlexibleNumber: Decodable {
     }
 }
 
-private enum SummaryStatusTone {
+private enum SummaryStatusTone: Equatable {
     case neutral
     case success
     case warning
@@ -286,6 +493,9 @@ private enum SummaryStatusTone {
 
 private struct StatusSummaryViewModel {
     let title: String
+    let currentSourceTitle: String
+    let statisticsDisplayMode: StatisticsDisplayMode
+    let statisticsModeText: String
     let statusText: String
     let statusTone: SummaryStatusTone
     let emailText: String
@@ -303,11 +513,16 @@ private struct StatusSummaryViewModel {
     let progressValue: String
     let progress: Double?
     let footerText: String
-    let hasAPIKey: Bool
+    let codexAPIKeyStatusText: String
+    let agiAPIKeyStatusText: String
     let pollIntervalText: String
     let displayStyle: StatusDisplayStyle
     let panelMode: MenuPanelMode
     let mcpStatusText: String
+    let canOpenDashboard: Bool
+    let canOpenPricing: Bool
+    let dashboardActionTitle: String
+    let sourceGroups: [SourceSummaryGroupViewModel]
 }
 
 private struct SummaryPackageItem {
@@ -315,6 +530,68 @@ private struct SummaryPackageItem {
     let subtitle: String
     let badgeText: String
     let badgeTone: SummaryStatusTone
+}
+
+private struct SourceSummaryGroupViewModel {
+    let source: PackageSource
+    let statusText: String
+    let statusTone: SummaryStatusTone
+    let usageLabel: String
+    let usageValue: String
+    let remainingValue: String
+    let renewalLabel: String
+    let renewalValue: String
+    let packageItems: [SummaryPackageItem]
+    let progressLabel: String
+    let progressPrefix: String?
+    let progressValue: String
+    let progress: Double?
+    let footerText: String
+    let isExpanded: Bool
+}
+
+private struct NormalizedMonitorPayload {
+    let usage: String
+    let remaining: String
+    let renewal: String?
+    let packageItems: [SummaryPackageItem]
+    let usedPercent: Double?
+    let usageLabel: String
+    let progressLabel: String
+    let progressPrefix: String?
+    let email: String?
+}
+
+private struct SourceMonitorState {
+    let source: PackageSource
+    var usage: String
+    var remaining: String
+    var renewal: String
+    var message: String
+    var usageLabel: String
+    var progressLabel: String
+    var progressPrefix: String?
+    var email: String?
+    var packageItems: [SummaryPackageItem]
+    var usedPercent: Double?
+    var fallbackText: String
+
+    static func placeholder(for source: PackageSource, hasAPIKey: Bool) -> SourceMonitorState {
+        SourceMonitorState(
+            source: source,
+            usage: "--",
+            remaining: "--",
+            renewal: "--",
+            message: hasAPIKey ? "等待数据" : "请先设置\(source.settingsTitle) API Key",
+            usageLabel: source == .agi ? "已用" : "已用/总",
+            progressLabel: source == .agi ? "总用量进度" : "用量进度",
+            progressPrefix: nil,
+            email: nil,
+            packageItems: [],
+            usedPercent: nil,
+            fallbackText: hasAPIKey ? "\(source.chipTitle): 加载中..." : "\(source.chipTitle): 未配置Key"
+        )
+    }
 }
 
 private extension SummaryStatusTone {
@@ -326,6 +603,9 @@ private extension SummaryStatusTone {
 private extension StatusSummaryViewModel {
     static let placeholder = StatusSummaryViewModel(
         title: AppMeta.displayName,
+        currentSourceTitle: PackageSource.codex.chipTitle,
+        statisticsDisplayMode: .single,
+        statisticsModeText: StatisticsDisplayMode.single.fullTitle,
         statusText: "等待中",
         statusTone: .neutral,
         emailText: "--",
@@ -343,11 +623,16 @@ private extension StatusSummaryViewModel {
         progressValue: "--",
         progress: nil,
         footerText: "等待数据",
-        hasAPIKey: false,
+        codexAPIKeyStatusText: "未配置",
+        agiAPIKeyStatusText: "未配置",
         pollIntervalText: "--",
         displayStyle: .remaining,
         panelMode: .statistics,
-        mcpStatusText: "MCP 未启动"
+        mcpStatusText: "MCP 未启动",
+        canOpenDashboard: true,
+        canOpenPricing: true,
+        dashboardActionTitle: PackageSource.codex.openDashboardTitle,
+        sourceGroups: []
     )
 }
 
@@ -595,16 +880,205 @@ private struct StyleChipButton: View {
     }
 }
 
+private struct SourceSummaryGroupView: View {
+    private static let metricCardHeight: CGFloat = 76
+
+    let model: SourceSummaryGroupViewModel
+    let onToggle: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: { onToggle?() }) {
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: model.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12)
+
+                    Text(model.source.title)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.primary)
+
+                    Spacer(minLength: 8)
+
+                    Text("余: \(model.remainingValue)")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    Text(model.statusText)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(model.statusTone.swiftUIColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(model.statusTone.swiftUIFillColor)
+                        .overlay {
+                            Capsule().stroke(model.statusTone.swiftUIBorderColor, lineWidth: 0.8)
+                        }
+                        .clipShape(Capsule())
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+
+            Text(model.footerText)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            if model.isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
+                        metricCard(title: "剩余", value: model.remainingValue)
+                        metricCard(title: model.usageLabel, value: model.usageValue)
+                        metricCard(title: model.renewalLabel, value: model.renewalValue, lineLimit: 2)
+                    }
+
+                    if !model.packageItems.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("套餐")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.secondary)
+
+                            ForEach(Array(model.packageItems.enumerated()), id: \.offset) { _, item in
+                                HStack(alignment: .center, spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(item.title)
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(1)
+
+                                        Text(item.subtitle)
+                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .monospacedDigit()
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                            .multilineTextAlignment(.leading)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+
+                                    Spacer(minLength: 6)
+
+                                    Text(item.badgeText)
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(item.badgeTone.swiftUIColor)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(item.badgeTone.swiftUIFillColor)
+                                        .overlay {
+                                            Capsule().stroke(item.badgeTone.swiftUIBorderColor, lineWidth: 0.8)
+                                        }
+                                        .clipShape(Capsule())
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentMaterialSurface(cornerRadius: 13)
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text(model.progressLabel)
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.secondary)
+
+                            Spacer(minLength: 8)
+
+                            if let progressPrefix = model.progressPrefix {
+                                Text(progressPrefix)
+                                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                                    .monospacedDigit()
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            Text(model.progressValue)
+                                .font(.system(size: 12.5, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(.primary)
+                        }
+
+                        GeometryReader { proxy in
+                            let value = model.progress ?? 0
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .fill(.quaternary)
+
+                                Capsule()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [
+                                                .accentColor.opacity(0.72),
+                                                .accentColor.opacity(0.34)
+                                            ],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .frame(width: max(10, proxy.size.width * value))
+                            }
+                        }
+                        .frame(height: 8)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentMaterialSurface(cornerRadius: 13)
+                }
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentMaterialSurface(cornerRadius: 16)
+    }
+
+    private func metricCard(title: String, value: String, lineLimit: Int = 1) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 9.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(value)
+                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .lineLimit(lineLimit)
+                .minimumScaleFactor(0.75)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: Self.metricCardHeight,
+            maxHeight: Self.metricCardHeight,
+            alignment: .topLeading
+        )
+        .contentMaterialSurface(cornerRadius: 13)
+    }
+}
+
 private struct LiquidGlassSummaryPanel: View {
     let model: StatusSummaryViewModel
     let onTogglePanelMode: (() -> Void)?
     let onToggleEmail: (() -> Void)?
     let onRefresh: (() -> Void)?
-    let onSetAPIKey: (() -> Void)?
+    let onSelectStatisticsMode: (() -> Void)?
+    let onSelectSource: (() -> Void)?
+    let onSetCodexAPIKey: (() -> Void)?
+    let onSetAGIAPIKey: (() -> Void)?
     let onSetInterval: (() -> Void)?
     let onOpenDashboard: (() -> Void)?
     let onOpenPricing: (() -> Void)?
     let onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)?
+    let onToggleSourceGroup: ((PackageSource) -> Void)?
     let onConfigureMCP: (() -> Void)?
     let onQuit: (() -> Void)?
 
@@ -627,8 +1101,12 @@ private struct LiquidGlassSummaryPanel: View {
 
     private var statisticsPage: some View {
         VStack(alignment: .leading, spacing: 9) {
-            metaRow
-            contentPanel
+            if model.statisticsDisplayMode == .dual {
+                dualContentPanel
+            } else {
+                metaRow
+                contentPanel
+            }
         }
     }
 
@@ -647,7 +1125,7 @@ private struct LiquidGlassSummaryPanel: View {
 
             Spacer(minLength: 6)
 
-            Text("点击右上角图标返回统计")
+            Text(model.statisticsModeText)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
@@ -670,12 +1148,34 @@ private struct LiquidGlassSummaryPanel: View {
         }
     }
 
+    private var dualContentPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(model.sourceGroups.enumerated()), id: \.element.source.rawValue) { _, group in
+                SourceSummaryGroupView(model: group) {
+                    onToggleSourceGroup?(group.source)
+                }
+            }
+        }
+    }
+
     private var headerRow: some View {
         HStack(alignment: .center, spacing: 8) {
-            Text(model.title)
-                .font(.system(size: 15, weight: .heavy))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
+            HStack(spacing: 8) {
+                Text(model.title)
+                    .font(.system(size: 15, weight: .heavy))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                if model.statisticsDisplayMode == .single {
+                    Text(model.currentSourceTitle)
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.thinMaterial)
+                        .clipShape(Capsule())
+                }
+            }
 
             Spacer(minLength: 6)
 
@@ -718,7 +1218,7 @@ private struct LiquidGlassSummaryPanel: View {
 
             Spacer(minLength: 6)
 
-            if model.canToggleEmail {
+            if model.statisticsDisplayMode == .single, model.canToggleEmail {
                 #if compiler(>=6.2)
                 if #available(macOS 26.0, *) {
                     GlassEffectContainer(spacing: 6) {
@@ -866,8 +1366,10 @@ private struct LiquidGlassSummaryPanel: View {
                     .font(.system(size: 10.5, weight: .medium, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
                     .minimumScaleFactor(0.84)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.horizontal, 11)
@@ -953,12 +1455,42 @@ private struct LiquidGlassSummaryPanel: View {
                 .padding(.bottom, 2)
 
             MenuActionButton(
-                title: "API Key",
-                subtitle: model.hasAPIKey ? "已配置" : "未配置",
+                title: "统计模式",
+                subtitle: model.statisticsModeText,
+                systemImage: "square.split.2x1",
+                shortcut: nil,
+                prominent: false,
+                action: onSelectStatisticsMode,
+                useInfoCardBackground: true
+            )
+
+            MenuActionButton(
+                title: "单显套餐源",
+                subtitle: model.currentSourceTitle,
+                systemImage: "square.stack.3d.up",
+                shortcut: nil,
+                prominent: false,
+                action: onSelectSource,
+                useInfoCardBackground: true
+            )
+
+            MenuActionButton(
+                title: PackageSource.codex.keyButtonTitle,
+                subtitle: model.codexAPIKeyStatusText,
                 systemImage: "key.horizontal",
                 shortcut: "⌘K",
                 prominent: false,
-                action: onSetAPIKey,
+                action: onSetCodexAPIKey,
+                useInfoCardBackground: true
+            )
+
+            MenuActionButton(
+                title: PackageSource.agi.keyButtonTitle,
+                subtitle: model.agiAPIKeyStatusText,
+                systemImage: "key.horizontal",
+                shortcut: nil,
+                prominent: false,
+                action: onSetAGIAPIKey,
                 useInfoCardBackground: true
             )
 
@@ -992,15 +1524,17 @@ private struct LiquidGlassSummaryPanel: View {
                 useInfoCardBackground: true
             )
 
-            MenuActionButton(
-                title: "打开伊莉丝控制台",
-                subtitle: nil,
-                systemImage: "safari",
-                shortcut: "⌘D",
-                prominent: false,
-                action: onOpenDashboard,
-                useInfoCardBackground: true
-            )
+            if model.canOpenDashboard {
+                MenuActionButton(
+                    title: model.dashboardActionTitle,
+                    subtitle: nil,
+                    systemImage: "safari",
+                    shortcut: "⌘D",
+                    prominent: false,
+                    action: onOpenDashboard,
+                    useInfoCardBackground: true
+                )
+            }
 
             displayStyleSection
 
@@ -1112,13 +1646,15 @@ private struct LiquidGlassSummaryPanel: View {
 
                 Spacer(minLength: 4)
 
-                Button(action: { onOpenPricing?() }) {
-                    Text("去续费")
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(.green)
-                        .lineLimit(1)
+                if model.canOpenPricing {
+                    Button(action: { onOpenPricing?() }) {
+                        Text("去续费")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(.green)
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
 
             Text(model.renewalValue)
@@ -1171,7 +1707,16 @@ private final class StatusSummaryView: NSView {
     var onRefresh: (() -> Void)? {
         didSet { updateRootView() }
     }
-    var onSetAPIKey: (() -> Void)? {
+    var onSelectStatisticsMode: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onSelectSource: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onSetCodexAPIKey: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onSetAGIAPIKey: (() -> Void)? {
         didSet { updateRootView() }
     }
     var onSetInterval: (() -> Void)? {
@@ -1184,6 +1729,9 @@ private final class StatusSummaryView: NSView {
         didSet { updateRootView() }
     }
     var onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onToggleSourceGroup: ((PackageSource) -> Void)? {
         didSet { updateRootView() }
     }
     var onConfigureMCP: (() -> Void)? {
@@ -1208,11 +1756,15 @@ private final class StatusSummaryView: NSView {
                 onTogglePanelMode: nil,
                 onToggleEmail: nil,
                 onRefresh: nil,
-                onSetAPIKey: nil,
+                onSelectStatisticsMode: nil,
+                onSelectSource: nil,
+                onSetCodexAPIKey: nil,
+                onSetAGIAPIKey: nil,
                 onSetInterval: nil,
                 onOpenDashboard: nil,
                 onOpenPricing: nil,
                 onSelectDisplayStyle: nil,
+                onToggleSourceGroup: nil,
                 onConfigureMCP: nil,
                 onQuit: nil
             )
@@ -1250,11 +1802,15 @@ private final class StatusSummaryView: NSView {
             onTogglePanelMode: onTogglePanelMode,
             onToggleEmail: onToggleEmail,
             onRefresh: onRefresh,
-            onSetAPIKey: onSetAPIKey,
+            onSelectStatisticsMode: onSelectStatisticsMode,
+            onSelectSource: onSelectSource,
+            onSetCodexAPIKey: onSetCodexAPIKey,
+            onSetAGIAPIKey: onSetAGIAPIKey,
             onSetInterval: onSetInterval,
             onOpenDashboard: onOpenDashboard,
             onOpenPricing: onOpenPricing,
             onSelectDisplayStyle: onSelectDisplayStyle,
+            onToggleSourceGroup: onToggleSourceGroup,
             onConfigureMCP: onConfigureMCP,
             onQuit: onQuit
         )
@@ -1266,8 +1822,9 @@ private final class StatusSummaryView: NSView {
 private struct MCPServerSnapshot: Encodable {
     let generatedAt: String
     let displayName: String
-    let dashboardURL: String
-    let pricingURL: String
+    let currentSource: String
+    let dashboardURL: String?
+    let pricingURL: String?
     let statusText: String
     let latestMessage: String
     let remaining: String
@@ -1618,7 +2175,6 @@ private final class MCPHTTPServer: @unchecked Sendable {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unchecked Sendable {
-    private let endpoint = URL(string: "https://codex.ylsagi.com/codex/info")!
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let mcpSnapshotStore = MCPSnapshotStore()
 
@@ -1627,27 +2183,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     private let summaryView = StatusSummaryView(frame: NSRect(x: 0, y: 0, width: StatusSummaryView.preferredWidth, height: 246))
 
     private var timer: Timer?
-    private var apiKey: String = ""
+    private var currentSource: PackageSource = .codex
+    private var statisticsDisplayMode: StatisticsDisplayMode = .single
+    private var codexAPIKey: String = ""
+    private var codexAPIKeyOrigin: APIKeyOrigin = .none
+    private var agiAPIKey: String = ""
+    private var agiAPIKeyOrigin: APIKeyOrigin = .none
     private var pollInterval: TimeInterval = 5
     private var displayStyle: StatusDisplayStyle = .remaining
     private var panelMode: MenuPanelMode = .statistics
-    private var statusFallbackText = "余额: --"
+    private var sourceStates: [PackageSource: SourceMonitorState] = [:]
+    private var sourceGroupExpanded: [PackageSource: Bool] = [
+        .codex: true,
+        .agi: true,
+    ]
     private var mcpEnabled = true
     private var mcpPort: UInt16 = AppMeta.defaultMCPPort
     private lazy var mcpServer = MCPHTTPServer(port: mcpPort) { [weak self] in
         guard let self else { return Data("{}".utf8) }
         return self.mcpSnapshotStore.get()
     }
-    private var latestUsage = "--"
-    private var latestRemaining = "--"
-    private var latestRenewal = "--"
-    private var latestMessage = "等待数据"
-    private var latestUsageLabel = "已用/总"
-    private var latestProgressLabel = "用量进度"
-    private var latestProgressPrefix: String?
-    private var latestEmail: String?
-    private var latestPackageItems: [SummaryPackageItem] = []
-    private var latestUsedPercent: Double?
     private var isEmailVisible = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -1668,7 +2223,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
 
     private func loadConfiguration() {
         let defaults = UserDefaults.standard
-        apiKey = defaults.string(forKey: DefaultsKey.apiKey) ?? ""
+        currentSource = PackageSource(rawValue: defaults.string(forKey: DefaultsKey.selectedSource) ?? "") ?? .codex
+        statisticsDisplayMode = StatisticsDisplayMode(rawValue: defaults.integer(forKey: DefaultsKey.statisticsDisplayMode)) ?? .single
+
+        let codexResolution = resolveAPIKey(for: .codex, defaults: defaults)
+        codexAPIKey = codexResolution.value
+        codexAPIKeyOrigin = codexResolution.origin
+
+        let agiResolution = resolveAPIKey(for: .agi, defaults: defaults)
+        agiAPIKey = agiResolution.value
+        agiAPIKeyOrigin = agiResolution.origin
+
         let interval = defaults.double(forKey: DefaultsKey.interval)
         if interval >= 1 {
             pollInterval = interval
@@ -1682,11 +2247,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         if let validPort = UInt16(exactly: savedPort), validPort > 0 {
             mcpPort = validPort
         }
+
+        rebuildSourceStates()
     }
 
     private func saveConfiguration() {
         let defaults = UserDefaults.standard
-        defaults.set(apiKey, forKey: DefaultsKey.apiKey)
+        defaults.set(codexAPIKey, forKey: DefaultsKey.apiKey)
+        defaults.set(codexAPIKey, forKey: DefaultsKey.codexAPIKey)
+        defaults.set(agiAPIKey, forKey: DefaultsKey.agiAPIKey)
+        defaults.set(currentSource.rawValue, forKey: DefaultsKey.selectedSource)
+        defaults.set(statisticsDisplayMode.rawValue, forKey: DefaultsKey.statisticsDisplayMode)
         defaults.set(pollInterval, forKey: DefaultsKey.interval)
         defaults.set(displayStyle.rawValue, forKey: DefaultsKey.displayStyle)
         defaults.set(mcpEnabled, forKey: DefaultsKey.mcpEnabled)
@@ -1694,11 +2265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     }
 
     private func setupStatusButton() {
-        if apiKey.isEmpty {
-            statusFallbackText = "余额: 未配置Key"
-        } else {
-            statusFallbackText = "余额: 加载中..."
-        }
+        rebuildSourceStates()
         renderSummaryView()
         renderStatusBar()
     }
@@ -1716,9 +2283,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 self?.refreshNow()
             }
         }
-        summaryView.onSetAPIKey = { [weak self] in
+        summaryView.onSelectStatisticsMode = { [weak self] in
             self?.performMenuAction {
-                self?.handleSetAPIKey()
+                self?.handleSelectStatisticsMode()
+            }
+        }
+        summaryView.onSelectSource = { [weak self] in
+            self?.performMenuAction {
+                self?.handleSelectSource()
+            }
+        }
+        summaryView.onSetCodexAPIKey = { [weak self] in
+            self?.performMenuAction {
+                self?.handleSetAPIKey(for: .codex)
+            }
+        }
+        summaryView.onSetAGIAPIKey = { [weak self] in
+            self?.performMenuAction {
+                self?.handleSetAPIKey(for: .agi)
             }
         }
         summaryView.onSetInterval = { [weak self] in
@@ -1738,6 +2320,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         }
         summaryView.onSelectDisplayStyle = { [weak self] style in
             self?.selectDisplayStyle(style)
+        }
+        summaryView.onToggleSourceGroup = { [weak self] source in
+            self?.toggleSourceGroup(source)
         }
         summaryView.onConfigureMCP = { [weak self] in
             self?.performMenuAction {
@@ -1771,30 +2356,277 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     }
 
     private func handleToggleEmailVisibility() {
-        guard latestEmail?.isEmpty == false else { return }
+        guard state(for: currentSource).email?.isEmpty == false else { return }
         isEmailVisible.toggle()
         renderSummaryView()
     }
 
-    @objc private func handleSetAPIKey() {
+    private func handleSelectStatisticsMode() {
         let alert = NSAlert()
-        alert.messageText = "设置 API Key"
-        alert.informativeText = "请输入 Bearer Token（只填 token 本体）"
+        alert.messageText = "选择统计模式"
+        alert.informativeText = "单显显示当前套餐源；双显会同时显示 Codex 和 AGI 两组统计，状态栏默认优先显示 Codex。"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+
+        let selector = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 220, height: 28), pullsDown: false)
+        StatisticsDisplayMode.allCases.forEach { mode in
+            selector.addItem(withTitle: mode.fullTitle)
+        }
+        selector.selectItem(at: StatisticsDisplayMode.allCases.firstIndex(of: statisticsDisplayMode) ?? 0)
+        alert.accessoryView = selector
+
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return }
+
+        statisticsDisplayMode = StatisticsDisplayMode.allCases[selector.indexOfSelectedItem]
+        saveConfiguration()
+        renderSummaryView()
+        renderStatusBar()
+        refreshNow()
+    }
+
+    private func handleSelectSource() {
+        let alert = NSAlert()
+        alert.messageText = "选择单显套餐源"
+        alert.informativeText = "单显模式下的统计面板会跟随当前选择的数据源；双显模式下仍会同时展示 Codex 和 AGI。"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+
+        let selector = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 220, height: 28), pullsDown: false)
+        PackageSource.allCases.forEach { source in
+            selector.addItem(withTitle: source.title)
+        }
+        selector.selectItem(at: PackageSource.allCases.firstIndex(of: currentSource) ?? 0)
+        alert.accessoryView = selector
+
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return }
+
+        currentSource = PackageSource.allCases[selector.indexOfSelectedItem]
+        isEmailVisible = false
+        saveConfiguration()
+        setupStatusButton()
+        refreshNow()
+    }
+
+    private func handleSetAPIKey(for source: PackageSource) {
+        let alert = NSAlert()
+        alert.messageText = source.apiKeyDialogTitle
+        alert.informativeText = source.apiKeyDialogHint
         alert.alertStyle = .informational
         alert.addButton(withTitle: "保存")
         alert.addButton(withTitle: "取消")
 
         let input = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        input.stringValue = apiKey
+        input.stringValue = apiKeyValue(for: source)
         alert.accessoryView = input
 
         let response = alert.runModal()
         guard response == .alertFirstButtonReturn else { return }
 
-        apiKey = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        setAPIKey(token, for: source)
         saveConfiguration()
-        setupStatusButton()
-        refreshNow()
+        if source == currentSource || statisticsDisplayMode == .dual {
+            setupStatusButton()
+            refreshNow()
+        } else {
+            renderSummaryView()
+        }
+    }
+
+    private func apiKeyValue(for source: PackageSource) -> String {
+        switch source {
+        case .codex:
+            return codexAPIKey
+        case .agi:
+            return agiAPIKey
+        }
+    }
+
+    private func apiKeyOrigin(for source: PackageSource) -> APIKeyOrigin {
+        switch source {
+        case .codex:
+            return codexAPIKeyOrigin
+        case .agi:
+            return agiAPIKeyOrigin
+        }
+    }
+
+    private func setAPIKey(_ value: String, for source: PackageSource) {
+        let normalized = Self.normalizeAPIKey(value)
+        switch source {
+        case .codex:
+            codexAPIKey = normalized
+            codexAPIKeyOrigin = .userDefaults
+        case .agi:
+            agiAPIKey = normalized
+            agiAPIKeyOrigin = .userDefaults
+        }
+    }
+
+    private func apiKeyStatusText(for source: PackageSource) -> String {
+        let token = apiKeyValue(for: source)
+        guard !token.isEmpty else { return "未配置" }
+        switch apiKeyOrigin(for: source) {
+        case .userDefaults:
+            return "已配置"
+        case .environment:
+            return "环境变量"
+        case .none:
+            return "未配置"
+        }
+    }
+
+    private func resolveAPIKey(for source: PackageSource, defaults: UserDefaults) -> APIKeyResolution {
+        if let stored = defaults.object(forKey: source.apiKeyDefaultsKey) as? String {
+            let normalized = Self.normalizeAPIKey(stored)
+            if !normalized.isEmpty {
+                return APIKeyResolution(value: normalized, origin: .userDefaults)
+            }
+        }
+        if let legacyKey = source.legacyDefaultsKey,
+           let stored = defaults.object(forKey: legacyKey) as? String {
+            let normalized = Self.normalizeAPIKey(stored)
+            if !normalized.isEmpty {
+                return APIKeyResolution(value: normalized, origin: .userDefaults)
+            }
+        }
+
+        let environment = ProcessInfo.processInfo.environment
+        if let value = source.environmentVariableCandidates.lazy
+            .compactMap({ environment[$0]?.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .map(Self.normalizeAPIKey)
+            .first(where: { !$0.isEmpty }) {
+            return APIKeyResolution(value: value, origin: .environment)
+        }
+        return APIKeyResolution(value: "", origin: .none)
+    }
+
+    nonisolated private static func normalizeAPIKey(_ rawValue: String) -> String {
+        let components = rawValue
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
+
+        guard !components.isEmpty else { return "" }
+
+        if components[0].lowercased() == "bearer" {
+            return components.dropFirst().first ?? ""
+        }
+
+        return components[0]
+    }
+
+    private func rebuildSourceStates() {
+        for source in PackageSource.allCases {
+            let hasAPIKey = !apiKeyValue(for: source).isEmpty
+            let existing = sourceStates[source]
+            if let existing, existing.remaining != "--" {
+                continue
+            }
+            sourceStates[source] = .placeholder(for: source, hasAPIKey: hasAPIKey)
+        }
+    }
+
+    private func state(for source: PackageSource) -> SourceMonitorState {
+        sourceStates[source] ?? .placeholder(for: source, hasAPIKey: !apiKeyValue(for: source).isEmpty)
+    }
+
+    private func setState(_ state: SourceMonitorState, for source: PackageSource) {
+        sourceStates[source] = state
+    }
+
+    private func updateSourceState(source: PackageSource, payload: NormalizedMonitorPayload, message: String) {
+        var state = state(for: source)
+        state.usage = payload.usage
+        state.remaining = payload.remaining
+        state.renewal = payload.renewal ?? "--"
+        state.message = message
+        state.usageLabel = payload.usageLabel
+        state.progressLabel = payload.progressLabel
+        state.progressPrefix = payload.progressPrefix
+        state.email = payload.email
+        state.packageItems = payload.packageItems
+        state.usedPercent = payload.usedPercent
+        state.fallbackText = "余: \(payload.remaining)"
+        setState(state, for: source)
+    }
+
+    private func updateSourceFailure(source: PackageSource, fallbackText: String, message: String) {
+        var state = state(for: source)
+        state.usage = "--"
+        state.remaining = "--"
+        state.renewal = "--"
+        state.message = message
+        state.usageLabel = source == .agi ? "已用" : "已用/总"
+        state.progressLabel = source == .agi ? "总用量进度" : "用量进度"
+        state.progressPrefix = nil
+        state.packageItems = []
+        state.usedPercent = nil
+        state.email = nil
+        state.fallbackText = fallbackText
+        setState(state, for: source)
+    }
+
+    private func toggleSourceGroup(_ source: PackageSource) {
+        sourceGroupExpanded[source] = !(sourceGroupExpanded[source] ?? true)
+        renderSummaryView()
+    }
+
+    private func primaryStatusSource() -> PackageSource {
+        if statisticsDisplayMode == .dual {
+            let codex = state(for: .codex)
+            if codex.remaining != "--" || !apiKeyValue(for: .codex).isEmpty {
+                return .codex
+            }
+            let agi = state(for: .agi)
+            if agi.remaining != "--" || !apiKeyValue(for: .agi).isEmpty {
+                return .agi
+            }
+            return .codex
+        }
+        return currentSource
+    }
+
+    private func summaryStatus(for source: PackageSource) -> (String, SummaryStatusTone) {
+        let sourceState = state(for: source)
+        if sourceState.remaining != "--" {
+            return ("在线", .success)
+        }
+        if sourceState.fallbackText.contains("未配置") || sourceState.message.contains("请先设置") {
+            return ("未配置", .warning)
+        }
+        if sourceState.fallbackText.contains("加载中") {
+            return ("加载中", .neutral)
+        }
+        if sourceState.fallbackText.contains("请求失败")
+            || sourceState.fallbackText.contains("授权错误")
+            || sourceState.fallbackText.contains("HTTP")
+            || sourceState.fallbackText.contains("解析失败")
+            || sourceState.fallbackText.contains("业务错误")
+            || sourceState.fallbackText.contains("响应异常") {
+            return ("异常", .critical)
+        }
+        return ("等待中", .neutral)
+    }
+
+    private func aggregateSummaryStatus() -> (String, SummaryStatusTone) {
+        let statuses = PackageSource.allCases.map(summaryStatus(for:))
+        if statuses.contains(where: { $0.1 == .success }) {
+            return ("在线", .success)
+        }
+        if statuses.allSatisfy({ $0.1 == .warning }) {
+            return ("未配置", .warning)
+        }
+        if statuses.contains(where: { $0.1 == .critical }) {
+            return ("异常", .critical)
+        }
+        if statuses.contains(where: { $0.1 == .neutral }) {
+            return ("加载中", .neutral)
+        }
+        return ("等待中", .neutral)
     }
 
     @objc private func handleSetInterval() {
@@ -1826,7 +2658,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     }
 
     @objc private func handleOpenDashboard() {
-        guard let url = URL(string: AppMeta.dashboardURL) else {
+        guard let rawURL = currentSource.dashboardURL,
+              let url = URL(string: rawURL) else {
             showError("控制台链接无效")
             return
         }
@@ -1881,7 +2714,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     }
 
     @objc private func handleOpenPricing() {
-        guard let url = URL(string: AppMeta.pricingURL) else {
+        guard let rawURL = currentSource.pricingURL,
+              let url = URL(string: rawURL) else {
             showError("续费链接无效")
             return
         }
@@ -1936,24 +2770,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     }
 
     private func makeMCPSnapshotData() -> Data {
+        let primarySource = primaryStatusSource()
+        let primaryState = state(for: primarySource)
+        let overallStatus = statisticsDisplayMode == .dual ? aggregateSummaryStatus() : summaryStatus(for: primarySource)
         let snapshot = MCPServerSnapshot(
             generatedAt: ISO8601DateFormatter().string(from: Date()),
             displayName: AppMeta.displayName,
-            dashboardURL: AppMeta.dashboardURL,
-            pricingURL: AppMeta.pricingURL,
-            statusText: currentSummaryStatus().0,
-            latestMessage: latestMessage,
-            remaining: latestRemaining,
-            usage: latestUsage,
-            renewal: latestRenewal,
-            progressLabel: latestProgressLabel,
-            progressPrefix: latestProgressPrefix,
-            usedPercent: latestUsedPercent,
-            email: latestEmail,
-            hasAPIKey: !apiKey.isEmpty,
+            currentSource: statisticsDisplayMode == .dual ? statisticsDisplayMode.title : currentSource.chipTitle,
+            dashboardURL: primarySource.dashboardURL,
+            pricingURL: primarySource.pricingURL,
+            statusText: overallStatus.0,
+            latestMessage: primaryState.message,
+            remaining: primaryState.remaining,
+            usage: primaryState.usage,
+            renewal: primaryState.renewal,
+            progressLabel: primaryState.progressLabel,
+            progressPrefix: primaryState.progressPrefix,
+            usedPercent: primaryState.usedPercent,
+            email: primaryState.email,
+            hasAPIKey: !apiKeyValue(for: primarySource).isEmpty,
             pollIntervalSeconds: pollInterval,
             displayStyle: displayStyle.title,
-            packageItems: latestPackageItems.map {
+            packageItems: primaryState.packageItems.map {
                 MCPPackageItem(title: $0.title, subtitle: $0.subtitle, badgeText: $0.badgeText)
             }
         )
@@ -1961,13 +2799,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
     }
 
     private func refreshNow() {
+        rebuildSourceStates()
+        renderSummaryView()
+        renderStatusBar()
+        PackageSource.allCases.forEach(refreshSource)
+    }
+
+    private func refreshSource(_ source: PackageSource) {
+        let apiKey = apiKeyValue(for: source)
+
         guard !apiKey.isEmpty else {
-            updateStatusBar(text: "余额: 未配置Key")
-            updateMenu(usage: "--", remaining: "--", message: "请先设置 API Key", usedPercent: nil, email: nil)
+            updateSourceFailure(
+                source: source,
+                fallbackText: "\(source.chipTitle): 未配置Key",
+                message: "请先设置\(source.settingsTitle) API Key"
+            )
+            renderSummaryView()
+            renderStatusBar()
             return
         }
 
-        var request = URLRequest(url: endpoint)
+        var request = URLRequest(url: source.endpoint)
         request.httpMethod = "GET"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
@@ -1976,240 +2828,279 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
 
             if let error {
                 DispatchQueue.main.async {
-                    self.updateStatusBar(text: "余额: 请求失败")
-                    self.updateMenu(usage: "--", remaining: "--", message: "网络错误: \(error.localizedDescription)", usedPercent: nil, email: nil)
+                    self.updateSourceFailure(
+                        source: source,
+                        fallbackText: "\(source.chipTitle): 请求失败",
+                        message: "网络错误: \(error.localizedDescription)"
+                    )
+                    self.renderSummaryView()
+                    self.renderStatusBar()
                 }
                 return
             }
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 DispatchQueue.main.async {
-                    self.updateStatusBar(text: "余额: 响应异常")
-                    self.updateMenu(usage: "--", remaining: "--", message: "无效响应", usedPercent: nil, email: nil)
+                    self.updateSourceFailure(
+                        source: source,
+                        fallbackText: "\(source.chipTitle): 响应异常",
+                        message: "无效响应"
+                    )
+                    self.renderSummaryView()
+                    self.renderStatusBar()
                 }
                 return
             }
 
             guard (200...299).contains(httpResponse.statusCode), let data else {
                 DispatchQueue.main.async {
-                    self.updateStatusBar(text: "余额: HTTP \(httpResponse.statusCode)")
-                    self.updateMenu(usage: "--", remaining: "--", message: "接口返回 HTTP \(httpResponse.statusCode)", usedPercent: nil, email: nil)
+                    self.updateSourceFailure(
+                        source: source,
+                        fallbackText: "\(source.chipTitle): HTTP \(httpResponse.statusCode)",
+                        message: "接口返回 HTTP \(httpResponse.statusCode)"
+                    )
+                    self.renderSummaryView()
+                    self.renderStatusBar()
                 }
                 return
             }
 
             do {
-                let decoded = try JSONDecoder().decode(APIEnvelope.self, from: data)
-                if let code = decoded.code, code != 200 {
-                    let apiMessage = decoded.msg ?? decoded.error ?? decoded.details ?? "接口返回业务错误"
-                    DispatchQueue.main.async {
-                        self.updateStatusBar(text: "余额: 业务错误")
-                        self.updateMenu(
-                            usage: "--",
-                            remaining: "--",
-                            message: "错误码 \(code): \(apiMessage)",
-                            usedPercent: nil,
-                            email: nil
-                        )
-                    }
-                    return
-                }
-
-                if let errorText = decoded.error {
-                    let details = decoded.details ?? decoded.msg ?? errorText
-                    DispatchQueue.main.async {
-                        self.updateStatusBar(text: "余额: 授权错误")
-                        self.updateMenu(usage: "--", remaining: "--", message: details, usedPercent: nil, email: nil)
-                    }
-                    return
-                }
-
-                guard let state = decoded.state else {
-                    let text = decoded.msg ?? decoded.details ?? "响应里缺少 state 字段"
-                    DispatchQueue.main.async {
-                        self.updateStatusBar(text: "余额: 响应异常")
-                        self.updateMenu(usage: "--", remaining: "--", message: text, usedPercent: nil, email: nil)
-                    }
-                    return
-                }
-
-                let packageUsagePayload = state.userPackgeUsage
-                let weeklyUsagePayload = state.userPackgeUsageWeek
-                let displayUsagePayload = weeklyUsagePayload ?? packageUsagePayload
-
-                guard let remainingNumber = packageUsagePayload?.remainingQuota ?? state.remainingQuota ?? displayUsagePayload?.remainingQuota else {
-                    throw NSError(
-                        domain: "BalanceParse",
-                        code: 1001,
-                        userInfo: [NSLocalizedDescriptionKey: "缺少 remaining_quota 字段"]
-                    )
-                }
-
-                let remaining = remainingNumber.display
-                let usageRemainingNumber = displayUsagePayload?.remainingQuota ?? remainingNumber
-                let packageRemainingNumber = packageUsagePayload?.remainingQuota ?? remainingNumber
-                let usedPercent = Self.resolveUsedPercentage(usage: displayUsagePayload, remaining: usageRemainingNumber)
-                let usageQuotaPair = Self.resolveUsageQuotaPair(usage: displayUsagePayload, remaining: usageRemainingNumber)
-                let dailyUsagePair = Self.resolveUsageQuotaPair(usage: packageUsagePayload, remaining: packageRemainingNumber)
-                let renewal = Self.resolveRenewalText(package: state.package)
-                let packageItems = Self.buildPackageSummaryItems(package: state.package)
-                let usageLabel = "已用/总"
-                let progressLabel = weeklyUsagePayload == nil ? "用量进度" : "本周用量进度"
-                let progressPrefix = usageQuotaPair.map { "\($0.used)/\($0.total)" }
-                let usage: String
-                if let dailyUsagePair {
-                    usage = "\(dailyUsagePair.used)/\(dailyUsagePair.total)"
-                } else if let usageQuotaPair {
-                    usage = "\(usageQuotaPair.used)/\(usageQuotaPair.total)"
-                } else if let usedPercent {
-                    usage = String(format: "%.2f%%", usedPercent)
-                } else if let totalCost = displayUsagePayload?.totalCost?.display {
-                    usage = "总消费: \(totalCost)"
-                } else {
-                    usage = "--"
-                }
+                let payload = try Self.parsePayload(from: data, source: source)
                 let now = Date()
 
                 DispatchQueue.main.async {
-                    self.updateStatusBar(text: "余: \(remaining)")
-                    self.updateMenu(
-                        usage: usage,
-                        remaining: remaining,
-                        message: "更新时间: \(Self.timeFormatter.string(from: now))",
-                        usedPercent: usedPercent,
-                        email: state.user?.email,
-                        renewal: renewal ?? "--",
-                        packageItems: packageItems,
-                        usageLabel: usageLabel,
-                        progressLabel: progressLabel,
-                        progressPrefix: progressPrefix
+                    self.updateSourceState(
+                        source: source,
+                        payload: payload,
+                        message: "更新时间: \(Self.timeFormatter.string(from: now))"
                     )
+                    self.renderSummaryView()
+                    self.renderStatusBar()
                 }
             } catch {
                 let rawSnippet = String(data: data, encoding: .utf8)?
                     .replacingOccurrences(of: "\n", with: " ")
                     .prefix(120) ?? "无法读取响应内容"
                 DispatchQueue.main.async {
-                    self.updateStatusBar(text: "余额: 解析失败")
-                    self.updateMenu(
-                        usage: "--",
-                        remaining: "--",
-                        message: "解析错误: \(error.localizedDescription) | \(rawSnippet)",
-                        usedPercent: nil,
-                        email: nil
+                    self.updateSourceFailure(
+                        source: source,
+                        fallbackText: "\(source.chipTitle): 解析失败",
+                        message: "解析错误: \(error.localizedDescription) | \(rawSnippet)"
                     )
+                    self.renderSummaryView()
+                    self.renderStatusBar()
                 }
             }
         }.resume()
     }
 
-    private func updateStatusBar(text: String) {
-        statusFallbackText = text
-        renderSummaryView()
-        renderStatusBar()
+    nonisolated private static func parsePayload(from data: Data, source: PackageSource) throws -> NormalizedMonitorPayload {
+        switch source {
+        case .codex:
+            return try parseCodexPayload(from: data)
+        case .agi:
+            return try parseAGIPayload(from: data)
+        }
     }
 
-    private func updateMenu(
-        usage: String,
-        remaining: String,
-        message: String,
-        usedPercent: Double?,
-        email: String?,
-        renewal: String = "--",
-        packageItems: [SummaryPackageItem] = [],
-        usageLabel: String = "已用/总",
-        progressLabel: String = "用量进度",
-        progressPrefix: String? = nil
-    ) {
-        latestUsage = usage
-        latestRemaining = remaining
-        latestRenewal = renewal
-        latestMessage = message
-        latestUsageLabel = usageLabel
-        latestProgressLabel = progressLabel
-        latestProgressPrefix = progressPrefix
-        latestEmail = email
-        latestPackageItems = packageItems
-        latestUsedPercent = usedPercent
+    nonisolated private static func parseCodexPayload(from data: Data) throws -> NormalizedMonitorPayload {
+        let decoded = try JSONDecoder().decode(APIEnvelope.self, from: data)
+        if let code = decoded.code, code != 200 {
+            let apiMessage = decoded.msg ?? decoded.error ?? decoded.details ?? "接口返回业务错误"
+            throw makeParseError("错误码 \(code): \(apiMessage)")
+        }
 
-        renderSummaryView()
-        renderStatusBar()
+        if let errorText = decoded.error {
+            throw makeParseError(decoded.details ?? decoded.msg ?? errorText)
+        }
+
+        guard let state = decoded.state else {
+            throw makeParseError(decoded.msg ?? decoded.details ?? "响应里缺少 state 字段")
+        }
+
+        let packageUsagePayload = state.userPackgeUsage
+        let weeklyUsagePayload = state.userPackgeUsageWeek
+        let displayUsagePayload = weeklyUsagePayload ?? packageUsagePayload
+
+        guard let remainingNumber = packageUsagePayload?.remainingQuota ?? state.remainingQuota ?? displayUsagePayload?.remainingQuota else {
+            throw makeParseError("缺少 remaining_quota 字段")
+        }
+
+        let usageRemainingNumber = displayUsagePayload?.remainingQuota ?? remainingNumber
+        let packageRemainingNumber = packageUsagePayload?.remainingQuota ?? remainingNumber
+        let usedPercent = resolveUsedPercentage(usage: displayUsagePayload, remaining: usageRemainingNumber)
+        let usageQuotaPair = resolveUsageQuotaPair(usage: displayUsagePayload, remaining: usageRemainingNumber)
+        let dailyUsagePair = resolveUsageQuotaPair(usage: packageUsagePayload, remaining: packageRemainingNumber)
+
+        let usage: String
+        if let dailyUsagePair {
+            usage = "\(dailyUsagePair.used)/\(dailyUsagePair.total)"
+        } else if let usageQuotaPair {
+            usage = "\(usageQuotaPair.used)/\(usageQuotaPair.total)"
+        } else if let usedPercent {
+            usage = String(format: "%.2f%%", usedPercent)
+        } else if let totalCost = displayUsagePayload?.totalCost?.display {
+            usage = "总消费: \(totalCost)"
+        } else {
+            usage = "--"
+        }
+
+        return NormalizedMonitorPayload(
+            usage: usage,
+            remaining: remainingNumber.display,
+            renewal: resolveRenewalText(package: state.package),
+            packageItems: buildPackageSummaryItems(package: state.package),
+            usedPercent: usedPercent,
+            usageLabel: "已用/总",
+            progressLabel: weeklyUsagePayload == nil ? "用量进度" : "本周用量进度",
+            progressPrefix: usageQuotaPair.map { "\($0.used)/\($0.total)" },
+            email: state.user?.email
+        )
+    }
+
+    nonisolated private static func parseAGIPayload(from data: Data) throws -> NormalizedMonitorPayload {
+        let decoded = try JSONDecoder().decode(AGIAPIEnvelope.self, from: data)
+        if let code = decoded.code, code != 200 {
+            throw makeParseError("错误码 \(code): \(decoded.message ?? "接口返回业务错误")")
+        }
+
+        guard let payload = decoded.data else {
+            throw makeParseError(decoded.message ?? "响应里缺少 data 字段")
+        }
+
+        let displayPackage = selectDisplayAGIPackage(from: payload.packages)
+        let remainingNumber = payload.summary?.remainingByte ?? displayPackage?.byteRemaining
+        guard let remainingNumber else {
+            throw makeParseError("缺少 remaining_byte 字段")
+        }
+
+        let totalNumber = payload.summary?.totalByte ?? displayPackage?.byteTotal
+        let usedNumber = payload.summary?.usedByte ?? displayPackage?.byteUsed
+
+        let usedPercent = resolveUsedPercentage(total: totalNumber, used: usedNumber, remaining: remainingNumber)
+        let usedValue = usedNumber?.doubleValue.map(formatQuotaValue)
+        let usage: String
+        if let usedValue {
+            usage = usedValue
+        } else if let usedPercent {
+            usage = String(format: "%.2f%%", usedPercent)
+        } else {
+            usage = "--"
+        }
+
+        return NormalizedMonitorPayload(
+            usage: usage,
+            remaining: remainingNumber.display,
+            renewal: resolveAGIRenewalText(summary: payload.summary, packages: payload.packages),
+            packageItems: buildAGIPackageSummaryItems(packages: payload.packages, summary: payload.summary),
+            usedPercent: usedPercent,
+            usageLabel: "已用",
+            progressLabel: "总用量进度",
+            progressPrefix: nil,
+            email: nil
+        )
+    }
+
+    nonisolated private static func makeParseError(_ description: String) -> NSError {
+        NSError(
+            domain: "MonitorParse",
+            code: 1001,
+            userInfo: [NSLocalizedDescriptionKey: description]
+        )
     }
 
     private func renderSummaryView() {
+        let activeSource = currentSource
+        let activeState = state(for: activeSource)
+        let activeStatus = summaryStatus(for: activeSource)
+        let overallStatus = statisticsDisplayMode == .dual ? aggregateSummaryStatus() : activeStatus
+
         let progressValue: String
-        if let latestUsedPercent {
-            progressValue = String(format: "%.2f%%", max(0, min(100, latestUsedPercent)))
+        if let usedPercent = activeState.usedPercent {
+            progressValue = String(format: "%.2f%%", max(0, min(100, usedPercent)))
         } else {
             progressValue = "--"
         }
 
         let displayEmail: String
-        if let latestEmail, !latestEmail.isEmpty {
-            displayEmail = isEmailVisible ? latestEmail : "***"
+        if let email = activeState.email, !email.isEmpty {
+            displayEmail = isEmailVisible ? email : "***"
         } else {
             displayEmail = "--"
         }
 
-        let (statusText, statusTone) = currentSummaryStatus()
-        let renewalLabel = latestPackageItems.count > 1 ? "最近到期" : "下次续费 / 到期"
-        let packageSectionTitle: String? = if latestPackageItems.isEmpty {
+        let packageSectionTitle: String? = if activeState.packageItems.isEmpty {
             nil
-        } else if latestPackageItems.count == 1 {
-            "当前套餐"
+        } else if activeState.packageItems.count == 1 {
+            "当前\(activeSource.settingsTitle)套餐"
         } else {
-            "有效套餐（\(latestPackageItems.count)）"
+            "\(activeSource.settingsTitle)有效套餐（\(activeState.packageItems.count)）"
         }
+
+        let sourceGroups = PackageSource.allCases.map { source -> SourceSummaryGroupViewModel in
+            let sourceState = state(for: source)
+            let status = summaryStatus(for: source)
+            let progressValue = sourceState.usedPercent.map {
+                String(format: "%.2f%%", max(0, min(100, $0)))
+            } ?? "--"
+
+            return SourceSummaryGroupViewModel(
+                source: source,
+                statusText: status.0,
+                statusTone: status.1,
+                usageLabel: sourceState.usageLabel,
+                usageValue: sourceState.usage,
+                remainingValue: sourceState.remaining,
+                renewalLabel: sourceState.packageItems.count > 1 ? "最近到期" : "下次续费",
+                renewalValue: sourceState.renewal,
+                packageItems: sourceState.packageItems,
+                progressLabel: sourceState.progressLabel,
+                progressPrefix: sourceState.progressPrefix,
+                progressValue: progressValue,
+                progress: sourceState.usedPercent.map { max(0, min(100, $0)) / 100 },
+                footerText: sourceState.message,
+                isExpanded: sourceGroupExpanded[source] ?? true
+            )
+        }
+
         summaryView.apply(
             StatusSummaryViewModel(
                 title: AppMeta.displayName,
-                statusText: statusText,
-                statusTone: statusTone,
+                currentSourceTitle: activeSource.chipTitle,
+                statisticsDisplayMode: statisticsDisplayMode,
+                statisticsModeText: statisticsDisplayMode.fullTitle,
+                statusText: overallStatus.0,
+                statusTone: overallStatus.1,
                 emailText: displayEmail,
-                canToggleEmail: latestEmail?.isEmpty == false,
+                canToggleEmail: activeState.email?.isEmpty == false,
                 isEmailVisible: isEmailVisible,
-                usageLabel: latestUsageLabel,
-                usageValue: latestUsage,
-                remainingValue: latestRemaining,
-                renewalLabel: renewalLabel,
-                renewalValue: latestRenewal,
+                usageLabel: activeState.usageLabel,
+                usageValue: activeState.usage,
+                remainingValue: activeState.remaining,
+                renewalLabel: activeState.packageItems.count > 1 ? "最近到期" : "下次续费",
+                renewalValue: activeState.renewal,
                 packageSectionTitle: packageSectionTitle,
-                packageItems: latestPackageItems,
-                progressLabel: latestProgressLabel,
-                progressPrefix: latestProgressPrefix,
+                packageItems: activeState.packageItems,
+                progressLabel: activeState.progressLabel,
+                progressPrefix: activeState.progressPrefix,
                 progressValue: progressValue,
-                progress: latestUsedPercent.map { max(0, min(100, $0)) / 100 },
-                footerText: latestMessage,
-                hasAPIKey: !apiKey.isEmpty,
+                progress: activeState.usedPercent.map { max(0, min(100, $0)) / 100 },
+                footerText: activeState.message,
+                codexAPIKeyStatusText: apiKeyStatusText(for: .codex),
+                agiAPIKeyStatusText: apiKeyStatusText(for: .agi),
                 pollIntervalText: "\(Int(pollInterval)) 秒",
                 displayStyle: displayStyle,
                 panelMode: panelMode,
-                mcpStatusText: currentMCPStatusText()
+                mcpStatusText: currentMCPStatusText(),
+                canOpenDashboard: activeSource.dashboardURL != nil,
+                canOpenPricing: activeSource.pricingURL != nil,
+                dashboardActionTitle: activeSource.openDashboardTitle,
+                sourceGroups: sourceGroups
             )
         )
         summaryView.frame = NSRect(origin: .zero, size: summaryView.intrinsicContentSize)
         mcpSnapshotStore.set(makeMCPSnapshotData())
-    }
-
-    private func currentSummaryStatus() -> (String, SummaryStatusTone) {
-        if latestRemaining != "--" {
-            return ("在线", .success)
-        }
-        if statusFallbackText.contains("未配置") || latestMessage.contains("请先设置 API Key") {
-            return ("未配置", .warning)
-        }
-        if statusFallbackText.contains("加载中") {
-            return ("加载中", .neutral)
-        }
-        if statusFallbackText.contains("请求失败")
-            || statusFallbackText.contains("授权错误")
-            || statusFallbackText.contains("HTTP")
-            || statusFallbackText.contains("解析失败")
-            || statusFallbackText.contains("业务错误")
-            || statusFallbackText.contains("响应异常") {
-            return ("异常", .critical)
-        }
-        return ("等待中", .neutral)
     }
 
     private func performMenuAction(_ action: @escaping () -> Void) {
@@ -2224,23 +3115,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         button.image = nil
         button.imagePosition = .noImage
 
+        let source = primaryStatusSource()
+        let sourceState = state(for: source)
+
         // 当接口数据不可用时，优先展示错误/未配置等状态文案。
-        guard latestRemaining != "--" else {
-            applySingleLineTitle(statusFallbackText)
+        guard sourceState.remaining != "--" else {
+            applySingleLineTitle(sourceState.fallbackText)
             return
         }
 
-        let clampedUsed = latestUsedPercent.map { max(0, min(100, $0)) }
+        let clampedUsed = sourceState.usedPercent.map { max(0, min(100, $0)) }
         let remainingPercent = clampedUsed.map { max(0, 100 - $0) }
 
         switch displayStyle {
         case .remaining:
-            applySingleLineTitle("余: \(latestRemaining)")
+            applySingleLineTitle("余: \(sourceState.remaining)")
         case .usedPercent:
             if let clampedUsed {
                 applySingleLineTitle(String(format: "用: %.2f%%", clampedUsed))
             } else {
-                applySingleLineTitle("用: \(latestUsage)")
+                applySingleLineTitle("用: \(sourceState.usage)")
             }
         case .remainingPercent:
             if let remainingPercent {
@@ -2255,7 +3149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             let top = remainingPercent.map { String(format: "%.2f%%", $0) } ?? "--"
             applyTwoLineImage(top: top, bottom: "剩余")
         case .circleProgress:
-            applyCircleProgressWithRemaining(progress: clampedUsed.map { $0 / 100 }, remainingText: "余: \(latestRemaining)")
+            applyCircleProgressWithRemaining(progress: clampedUsed.map { $0 / 100 }, remainingText: "余: \(sourceState.remaining)")
         }
     }
 
@@ -2444,6 +3338,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         return max(0, totalQuota - remainingQuota)
     }
 
+    nonisolated private static func resolveUsedPercentage(
+        total: FlexibleNumber?,
+        used: FlexibleNumber?,
+        remaining: FlexibleNumber?
+    ) -> Double? {
+        guard let totalValue = total?.doubleValue, totalValue > 0 else {
+            return nil
+        }
+        if let usedValue = used?.doubleValue {
+            return max(0, min(100, (usedValue / totalValue) * 100))
+        }
+        if let remainingValue = remaining?.doubleValue {
+            return max(0, min(100, (1 - (remainingValue / totalValue)) * 100))
+        }
+        return nil
+    }
+
+    nonisolated private static func resolveUsageQuotaPair(
+        total: FlexibleNumber?,
+        used: FlexibleNumber?,
+        remaining: FlexibleNumber?
+    ) -> (used: String, total: String)? {
+        guard let totalValue = total?.doubleValue, totalValue > 0 else {
+            return nil
+        }
+
+        let usedValue: Double?
+        if let explicitUsed = used?.doubleValue {
+            usedValue = explicitUsed
+        } else if let remainingValue = remaining?.doubleValue {
+            usedValue = max(0, totalValue - remainingValue)
+        } else {
+            usedValue = nil
+        }
+
+        guard let usedValue else { return nil }
+        return (
+            used: formatQuotaValue(usedValue),
+            total: formatQuotaValue(totalValue)
+        )
+    }
+
     nonisolated private static func formatQuotaValue(_ value: Double) -> String {
         guard value.isFinite else { return "--" }
         let rounded = value.rounded()
@@ -2453,11 +3389,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         return String(format: "%.2f", value)
     }
 
-    nonisolated private static func resolveRenewalText(package: PackagePayload?) -> String? {
-        guard let package = selectDisplayPackage(from: package?.packages),
-              let expiresAt = package.expiresAt,
-              let expiresDate = parseAPIDate(expiresAt)
-        else {
+    nonisolated private static func resolveRenewalText(from dateString: String?) -> String? {
+        guard let dateString,
+              let expiresDate = parseAPIDate(dateString) else {
             return nil
         }
 
@@ -2477,6 +3411,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         let absolute = absoluteFormatter.string(from: expiresDate)
         let relative = relativeFormatter.localizedString(for: expiresDate, relativeTo: Date())
         return "\(absolute)（\(relative)）"
+    }
+
+    nonisolated private static func resolveRenewalText(package: PackagePayload?) -> String? {
+        guard let package = selectDisplayPackage(from: package?.packages) else {
+            return nil
+        }
+        return resolveRenewalText(from: package.expiresAt)
     }
 
     nonisolated private static func buildPackageSummaryItems(package: PackagePayload?) -> [SummaryPackageItem] {
@@ -2503,7 +3444,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
 
             return SummaryPackageItem(
                 title: normalizePackageTitle(item.packageType),
-                subtitle: "生效 \(startText)  到期 \(expireText)",
+                subtitle: startText == "--"
+                    ? "到期 \(expireText)"
+                    : "开通 \(startText)\n到期 \(expireText)",
+                badgeText: daysRemaining == 0 ? "今天到期" : "剩\(daysRemaining)天",
+                badgeTone: badgeTone
+            )
+        }
+    }
+
+    nonisolated private static func resolveAGIRenewalText(summary: AGISummary?, packages: [AGIPackage]?) -> String? {
+        resolveRenewalText(from: summary?.latestExpireTime ?? selectDisplayAGIPackage(from: packages)?.expireTime)
+    }
+
+    nonisolated private static func buildAGIPackageSummaryItems(
+        packages: [AGIPackage]?,
+        summary: AGISummary?
+    ) -> [SummaryPackageItem] {
+        activeAGIPackages(from: packages).map { item, expiresDate in
+            let startText = parseAPIDate(item.createTime ?? "").map { compactDateFormatter.string(from: $0) } ?? "--"
+            let expireText = compactDateFormatter.string(from: expiresDate)
+            let explicitDays = item.day ?? -1
+            let computedDays = Calendar.current.dateComponents(
+                [.day],
+                from: Calendar.current.startOfDay(for: Date()),
+                to: Calendar.current.startOfDay(for: expiresDate)
+            ).day ?? 0
+            let daysRemaining = max(0, explicitDays >= 0 ? explicitDays : computedDays)
+
+            let badgeTone: SummaryStatusTone
+            if daysRemaining <= 1 {
+                badgeTone = .critical
+            } else if daysRemaining <= 7 {
+                badgeTone = .warning
+            } else {
+                badgeTone = .success
+            }
+
+            let subtitleParts = [
+                startText == "--" ? nil : "开通 \(startText)",
+                "到期 \(expireText)"
+            ].compactMap { $0 }
+
+            return SummaryPackageItem(
+                title: normalizeAGIPackageTitle(item, summary: summary),
+                subtitle: subtitleParts.joined(separator: "\n"),
                 badgeText: daysRemaining == 0 ? "今天到期" : "剩\(daysRemaining)天",
                 badgeTone: badgeTone
             )
@@ -2538,6 +3523,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         return candidates.sorted(by: { $0.1 < $1.1 })
     }
 
+    nonisolated private static func selectDisplayAGIPackage(from packages: [AGIPackage]?) -> AGIPackage? {
+        let now = Date()
+        let candidates = activeAGIPackages(from: packages)
+
+        if let upcoming = candidates
+            .filter({ $0.1 >= now })
+            .min(by: { $0.1 < $1.1 }) {
+            return upcoming.0
+        }
+
+        return candidates.max(by: { $0.1 < $1.1 })?.0
+    }
+
+    nonisolated private static func activeAGIPackages(from packages: [AGIPackage]?) -> [(AGIPackage, Date)] {
+        guard let packages, !packages.isEmpty else { return [] }
+        return packages.compactMap { item -> (AGIPackage, Date)? in
+            guard let expireTime = item.expireTime,
+                  let expireDate = parseAPIDate(expireTime) else {
+                return nil
+            }
+            return (item, expireDate)
+        }
+        .sorted(by: { $0.1 < $1.1 })
+    }
+
     nonisolated private static func parseAPIDate(_ rawValue: String) -> Date? {
         let formatterWithFractionalSeconds = ISO8601DateFormatter()
         formatterWithFractionalSeconds.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -2555,6 +3565,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         return rawValue
             .replacingOccurrences(of: "_", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func normalizeAGIPackageTitle(_ package: AGIPackage, summary: AGISummary?) -> String {
+        let baseTitle = normalizePackageTitle(package.orderClass ?? summary?.userType ?? "AGI 套餐")
+        if let level = package.level ?? summary?.highestLevel {
+            return "\(baseTitle) Lv\(level)"
+        }
+        return baseTitle
     }
 
     nonisolated private static func maskEmail(_ email: String?) -> String? {
