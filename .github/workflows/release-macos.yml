@@ -1,0 +1,156 @@
+name: Release macOS App
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      APPCAST_URL: https://mdddj.github.io/yls-yy-app/appcast.xml
+      SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate Sparkle secrets
+        run: |
+          if [ -z "${SPARKLE_PUBLIC_ED_KEY}" ]; then
+            echo "::error::Missing repository secret SPARKLE_PUBLIC_ED_KEY"
+            exit 1
+          fi
+          if [ -z "${SPARKLE_PRIVATE_KEY}" ]; then
+            echo "::error::Missing repository secret SPARKLE_PRIVATE_KEY"
+            exit 1
+          fi
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Resolve app version
+        id: version
+        run: |
+          BUILD_SETTINGS="$(xcodebuild -project yls-app.xcodeproj -scheme yls-app -showBuildSettings)"
+          MARKETING_VERSION="$(printf '%s\n' "$BUILD_SETTINGS" | awk -F ' = ' '/MARKETING_VERSION/ { print $2; exit }')"
+          BUILD_NUMBER="$(printf '%s\n' "$BUILD_SETTINGS" | awk -F ' = ' '/CURRENT_PROJECT_VERSION/ { print $2; exit }')"
+          ARCHIVE_NAME="yls-app-${MARKETING_VERSION}.zip"
+          NOTES_BASENAME="${ARCHIVE_NAME%.zip}"
+
+          echo "marketing_version=${MARKETING_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "archive_name=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "notes_basename=${NOTES_BASENAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release app
+        run: |
+          xcodebuild \
+            -project yls-app.xcodeproj \
+            -scheme yls-app \
+            -configuration Release \
+            -derivedDataPath DerivedData \
+            SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY}" \
+            SPARKLE_FEED_URL="${APPCAST_URL}" \
+            build
+
+      - name: Package app
+        run: |
+          mkdir -p dist appcast-src pages
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "DerivedData/Build/Products/Release/yls-app.app" \
+            "dist/${{ steps.version.outputs.archive_name }}"
+
+          cp "dist/${{ steps.version.outputs.archive_name }}" appcast-src/
+
+          cat > "appcast-src/${{ steps.version.outputs.notes_basename }}.md" <<EOF
+          ## ${{ steps.version.outputs.marketing_version }}
+
+          - Tag: ${GITHUB_REF_NAME}
+          - Build: ${{ steps.version.outputs.build_number }}
+          - Commit: ${GITHUB_SHA}
+          EOF
+
+      - name: Locate Sparkle tools
+        id: sparkle
+        run: |
+          GENERATE_APPCAST="$(find "${HOME}/Library/Developer/Xcode/DerivedData" -path '*Sparkle/bin/generate_appcast' | head -n 1)"
+          if [ -z "${GENERATE_APPCAST}" ]; then
+            echo "::error::Unable to locate Sparkle generate_appcast tool"
+            exit 1
+          fi
+          echo "generate_appcast=${GENERATE_APPCAST}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
+
+          gh release upload "${GITHUB_REF_NAME}" "dist/${{ steps.version.outputs.archive_name }}" --clobber
+
+      - name: Generate appcast
+        run: |
+          printf '%s' "${SPARKLE_PRIVATE_KEY}" | \
+            "${{ steps.sparkle.outputs.generate_appcast }}" \
+              --ed-key-file - \
+              --embed-release-notes \
+              --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${GITHUB_REF_NAME}/" \
+              --link "https://github.com/${{ github.repository }}" \
+              appcast-src
+
+          cp appcast-src/appcast.xml pages/appcast.xml
+
+      - name: Build Pages index
+        run: |
+          cat > pages/index.html <<EOF
+          <!doctype html>
+          <html lang="zh-CN">
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>yls-yy-app 更新源</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 40px auto; max-width: 760px; padding: 0 20px; color: #111827; }
+              code { background: #f3f4f6; padding: 2px 6px; border-radius: 6px; }
+              a { color: #2563eb; }
+            </style>
+          </head>
+          <body>
+            <h1>yls-yy-app 更新源</h1>
+            <p>最新标签: <code>${GITHUB_REF_NAME}</code></p>
+            <p>Appcast: <a href="./appcast.xml">appcast.xml</a></p>
+            <p>GitHub Release: <a href="https://github.com/${{ github.repository }}/releases/tag/${GITHUB_REF_NAME}">${GITHUB_REF_NAME}</a></p>
+          </body>
+          </html>
+          EOF
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: pages
+
+  deploy-pages:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

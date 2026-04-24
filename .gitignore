@@ -1,0 +1,17 @@
+.DS_Store
+
+# Xcode local state
+DerivedData/
+build/
+*.xcuserstate
+*.xccheckout
+xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# SwiftPM local caches
+.build/
+
+# Release artifacts
+dist/
+appcast-src/
+pages/
