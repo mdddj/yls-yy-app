@@ -550,6 +550,76 @@ private struct SourceSummaryGroupViewModel {
     let isExpanded: Bool
 }
 
+private struct WeightedMetricRowLayout: Layout {
+    let weights: [CGFloat]
+    let spacing: CGFloat
+
+    init(weights: [CGFloat], spacing: CGFloat = 8) {
+        self.weights = weights
+        self.spacing = spacing
+    }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let availableWidth = resolvedWidth(for: proposal, subviews: subviews)
+        let widths = distributedWidths(for: availableWidth, count: subviews.count)
+        let maxHeight = subviews.enumerated().reduce(CGFloat.zero) { current, pair in
+            let (index, subview) = pair
+            let size = subview.sizeThatFits(
+                ProposedViewSize(width: widths[index], height: proposal.height)
+            )
+            return max(current, size.height)
+        }
+        return CGSize(width: availableWidth, height: maxHeight)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let widths = distributedWidths(for: bounds.width, count: subviews.count)
+        var currentX = bounds.minX
+
+        for (index, subview) in subviews.enumerated() {
+            let width = widths[index]
+            subview.place(
+                at: CGPoint(x: currentX, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: width, height: bounds.height)
+            )
+            currentX += width + spacing
+        }
+    }
+
+    private func resolvedWidth(for proposal: ProposedViewSize, subviews: Subviews) -> CGFloat {
+        if let width = proposal.width {
+            return width
+        }
+
+        let intrinsicWidth = subviews.reduce(CGFloat.zero) { current, subview in
+            current + subview.sizeThatFits(.unspecified).width
+        }
+        let totalSpacing = spacing * CGFloat(max(subviews.count - 1, 0))
+        return intrinsicWidth + totalSpacing
+    }
+
+    private func distributedWidths(for totalWidth: CGFloat, count: Int) -> [CGFloat] {
+        guard count > 0 else { return [] }
+
+        let totalSpacing = spacing * CGFloat(max(count - 1, 0))
+        let contentWidth = max(0, totalWidth - totalSpacing)
+        let activeWeights = Array(weights.prefix(count))
+        let weightSum = max(activeWeights.reduce(CGFloat.zero, +), 1)
+
+        return activeWeights.map { contentWidth * ($0 / weightSum) }
+    }
+}
+
 private struct NormalizedMonitorPayload {
     let usage: String
     let remaining: String
@@ -881,8 +951,6 @@ private struct StyleChipButton: View {
 }
 
 private struct SourceSummaryGroupView: View {
-    private static let metricCardHeight: CGFloat = 76
-
     let model: SourceSummaryGroupViewModel
     let onToggle: (() -> Void)?
 
@@ -929,7 +997,7 @@ private struct SourceSummaryGroupView: View {
 
             if model.isExpanded {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(alignment: .top, spacing: 8) {
+                    WeightedMetricRowLayout(weights: [3, 3, 4], spacing: 8) {
                         metricCard(title: "剩余", value: model.remainingValue)
                         metricCard(title: model.usageLabel, value: model.usageValue)
                         metricCard(title: model.renewalLabel, value: model.renewalValue, lineLimit: 2)
@@ -1045,11 +1113,10 @@ private struct SourceSummaryGroupView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Text(value)
-                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                .font(.system(size: 9.5, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
                 .lineLimit(lineLimit)
-                .minimumScaleFactor(0.75)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -1057,8 +1124,7 @@ private struct SourceSummaryGroupView: View {
         .padding(.vertical, 8)
         .frame(
             maxWidth: .infinity,
-            minHeight: Self.metricCardHeight,
-            maxHeight: Self.metricCardHeight,
+            maxHeight: .infinity,
             alignment: .topLeading
         )
         .contentMaterialSurface(cornerRadius: 13)
@@ -1663,7 +1729,7 @@ private struct LiquidGlassSummaryPanel: View {
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
-                .lineLimit(1)
+                .lineLimit(2)
                 .minimumScaleFactor(0.72)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3404,7 +3470,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         let absoluteFormatter = DateFormatter()
         absoluteFormatter.locale = Locale(identifier: "zh_CN")
         absoluteFormatter.timeZone = .current
-        absoluteFormatter.dateFormat = renewalYear == currentYear ? "MM-dd HH:mm" : "yyyy-MM-dd HH:mm"
+        absoluteFormatter.dateFormat = renewalYear == currentYear ? "MM-dd" : "yyyy-MM-dd"
 
         let relativeFormatter = RelativeDateTimeFormatter()
         relativeFormatter.locale = Locale(identifier: "zh_CN")
