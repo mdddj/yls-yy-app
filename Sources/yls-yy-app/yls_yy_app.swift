@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import Network
 import SwiftUI
@@ -460,6 +461,636 @@ private enum FlexibleNumber: Decodable {
         case .string(let value):
             return Double(value.replacingOccurrences(of: "%", with: ""))
         }
+    }
+}
+
+private enum CodexLogAPI {
+    static let endpoint = URL(string: "https://code.ylsagi.com/codex/logs")!
+}
+
+private struct CodexLogAPIEnvelope: Decodable {
+    let code: Int?
+    let msg: String?
+    let data: CodexLogPage?
+}
+
+private struct CodexLogPage: Decodable {
+    let items: [CodexLogItem]
+    let page: Int
+    let pageSize: Int
+    let total: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case page
+        case pageSize = "page_size"
+        case total
+    }
+}
+
+private struct CodexLogItem: Decodable, Identifiable {
+    let rawID: String?
+    let type: String?
+    let model: String?
+    let reasoning: String?
+    let inputTokens: FlexibleNumber?
+    let inputTokensCached: FlexibleNumber?
+    let inputCacheCreationTokens: FlexibleNumber?
+    let outputTokens: FlexibleNumber?
+    let outputTokensReasoning: FlexibleNumber?
+    let totalTokens: FlexibleNumber?
+    let inputCost: FlexibleNumber?
+    let outputCost: FlexibleNumber?
+    let cacheCreationCost: FlexibleNumber?
+    let cacheReadCost: FlexibleNumber?
+    let totalCost: FlexibleNumber?
+    let createdAt: String?
+    let updatedAt: String?
+
+    var id: String {
+        rawID ?? "\(createdAt ?? "unknown")-\(totalTokens?.display ?? "0")"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case rawID = "_id"
+        case type
+        case model
+        case reasoning
+        case inputTokens = "input_tokens"
+        case inputTokensCached = "input_tokens_cached"
+        case inputCacheCreationTokens = "input_cache_creation_tokens"
+        case outputTokens = "output_tokens"
+        case outputTokensReasoning = "output_tokens_reasoning"
+        case totalTokens = "total_tokens"
+        case inputCost = "input_cost"
+        case outputCost = "output_cost"
+        case cacheCreationCost = "cache_creation_cost"
+        case cacheReadCost = "cache_read_cost"
+        case totalCost = "total_cost"
+        case createdAt
+        case updatedAt
+    }
+}
+
+private enum CodexLogFormat {
+    static let pageSizeOptions = [10, 20, 50, 100]
+
+    static func tokenText(_ value: FlexibleNumber?) -> String {
+        numberText(value?.doubleValue)
+    }
+
+    static func costText(_ value: FlexibleNumber?) -> String {
+        costText(value?.doubleValue)
+    }
+
+    static func costText(_ value: Double?) -> String {
+        guard let value, value.isFinite else { return "--" }
+        if abs(value) < 0.00005 {
+            return "$0"
+        }
+        return String(format: "$%.4f", value)
+    }
+
+    static func dateText(_ rawValue: String?) -> String {
+        guard let rawValue, !rawValue.isEmpty else { return "--" }
+        let isoWithFractionalSeconds = ISO8601DateFormatter()
+        isoWithFractionalSeconds.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+
+        if let date = isoWithFractionalSeconds.date(from: rawValue) ?? iso.date(from: rawValue) {
+            let dateFormatter = DateFormatter()
+            dateFormatter.locale = Locale(identifier: "zh_CN")
+            dateFormatter.timeZone = .current
+            dateFormatter.dateFormat = "yyyy年M月d日 HH:mm:ss"
+            return dateFormatter.string(from: date)
+        }
+        return rawValue
+    }
+
+    static func tokenSummary(for item: CodexLogItem) -> String {
+        let input = tokenText(item.inputTokens)
+        let output = tokenText(item.outputTokens)
+        let cached = item.inputTokensCached?.doubleValue ?? 0
+        let reasoning = item.outputTokensReasoning?.doubleValue ?? 0
+
+        var inputPart = "In \(input)"
+        if cached > 0 {
+            inputPart += " (cached \(numberText(cached)))"
+        }
+
+        var outputPart = "Out \(output)"
+        if reasoning > 0 {
+            outputPart += " (think \(numberText(reasoning)))"
+        }
+
+        return "\(inputPart) · \(outputPart)"
+    }
+
+    static func costSummary(for item: CodexLogItem) -> String {
+        let cacheCost = (item.cacheReadCost?.doubleValue ?? 0) + (item.cacheCreationCost?.doubleValue ?? 0)
+        return "输入 \(costText(item.inputCost)) · 输出 \(costText(item.outputCost)) · 缓存 \(costText(cacheCost))"
+    }
+
+    static func billableInputTokens(for item: CodexLogItem) -> String {
+        guard let input = item.inputTokens?.doubleValue else { return "--" }
+        let cached = item.inputTokensCached?.doubleValue ?? 0
+        return numberText(max(0, input - cached))
+    }
+
+    static func outputDetailText(for item: CodexLogItem) -> String {
+        let output = tokenText(item.outputTokens)
+        let reasoning = item.outputTokensReasoning?.doubleValue ?? 0
+        guard reasoning > 0 else { return output }
+        return "\(output)  (think \(numberText(reasoning)))"
+    }
+
+    static func cacheCost(for item: CodexLogItem) -> String {
+        costText((item.cacheReadCost?.doubleValue ?? 0) + (item.cacheCreationCost?.doubleValue ?? 0))
+    }
+
+    private static func numberText(_ value: Double?) -> String {
+        guard let value, value.isFinite else { return "--" }
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = abs(value.rounded() - value) < 0.005 ? 0 : 2
+        formatter.minimumFractionDigits = 0
+        return formatter.string(from: NSNumber(value: value)) ?? "\(Int(value.rounded()))"
+    }
+}
+
+@MainActor
+private final class CodexLogViewModel: ObservableObject, @unchecked Sendable {
+    @Published private(set) var items: [CodexLogItem] = []
+    @Published private(set) var page = 1
+    @Published var pageSize = 20
+    @Published private(set) var total = 0
+    @Published private(set) var isLoading = false
+    @Published private(set) var errorMessage: String?
+
+    private let apiKey: String
+    private var latestRequestID = UUID()
+
+    init(apiKey: String) {
+        self.apiKey = apiKey
+    }
+
+    var totalPages: Int {
+        max(1, Int(ceil(Double(total) / Double(max(pageSize, 1)))))
+    }
+
+    var pageSummary: String {
+        "第 \(page) / \(totalPages) 页"
+    }
+
+    var totalSummary: String {
+        total > 0 ? "共 \(total) 条" : "暂无记录"
+    }
+
+    var canGoPrevious: Bool {
+        page > 1 && !isLoading
+    }
+
+    var canGoNext: Bool {
+        page < totalPages && !isLoading
+    }
+
+    func loadIfNeeded() {
+        guard items.isEmpty, !isLoading, errorMessage == nil else { return }
+        load(page: 1)
+    }
+
+    func reload() {
+        load(page: page)
+    }
+
+    func loadPreviousPage() {
+        guard canGoPrevious else { return }
+        load(page: page - 1)
+    }
+
+    func loadNextPage() {
+        guard canGoNext else { return }
+        load(page: page + 1)
+    }
+
+    func load(page requestedPage: Int) {
+        guard !apiKey.isEmpty else {
+            items = []
+            total = 0
+            errorMessage = "请先设置 Codex API Key"
+            return
+        }
+
+        let boundedPage = total > 0
+            ? max(1, min(requestedPage, totalPages))
+            : max(1, requestedPage)
+        let currentPageSize = max(1, pageSize)
+        let requestID = UUID()
+        latestRequestID = requestID
+        isLoading = true
+        errorMessage = nil
+
+        Task { [weak self, apiKey, boundedPage, currentPageSize, requestID] in
+            do {
+                let page = try await Self.fetchLogs(
+                    apiKey: apiKey,
+                    page: boundedPage,
+                    pageSize: currentPageSize
+                )
+                guard let self, self.latestRequestID == requestID else { return }
+                self.items = page.items
+                self.page = page.page
+                self.pageSize = page.pageSize
+                self.total = page.total
+                self.errorMessage = nil
+                self.isLoading = false
+            } catch {
+                guard let self, self.latestRequestID == requestID else { return }
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
+            }
+        }
+    }
+
+    nonisolated private static func fetchLogs(apiKey: String, page: Int, pageSize: Int) async throws -> CodexLogPage {
+        guard var components = URLComponents(url: CodexLogAPI.endpoint, resolvingAgainstBaseURL: false) else {
+            throw makeLogError("日志接口地址无效")
+        }
+        components.queryItems = [
+            URLQueryItem(name: "page", value: "\(page)"),
+            URLQueryItem(name: "page_size", value: "\(pageSize)"),
+        ]
+        guard let url = components.url else {
+            throw makeLogError("日志接口分页参数无效")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw makeLogError("日志接口响应异常")
+        }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw makeLogError("日志接口返回 HTTP \(httpResponse.statusCode)")
+        }
+
+        do {
+            let decoded = try JSONDecoder().decode(CodexLogAPIEnvelope.self, from: data)
+            if let code = decoded.code, code != 200 {
+                throw makeLogError("错误码 \(code): \(decoded.msg ?? "接口返回业务错误")")
+            }
+            guard let page = decoded.data else {
+                throw makeLogError(decoded.msg ?? "响应里缺少 data 字段")
+            }
+            return page
+        } catch let error as NSError where error.domain == "CodexLog" {
+            throw error
+        } catch {
+            let rawSnippet = String(data: data, encoding: .utf8)?
+                .replacingOccurrences(of: "\n", with: " ")
+                .prefix(120) ?? "无法读取响应内容"
+            throw makeLogError("解析日志失败: \(error.localizedDescription) | \(rawSnippet)")
+        }
+    }
+
+    nonisolated private static func makeLogError(_ description: String) -> NSError {
+        NSError(
+            domain: "CodexLog",
+            code: 1002,
+            userInfo: [NSLocalizedDescriptionKey: description]
+        )
+    }
+}
+
+private struct CodexLogWindowView: View {
+    @StateObject private var viewModel: CodexLogViewModel
+    @State private var expandedLogIDs: Set<String> = []
+
+    init(apiKey: String) {
+        _viewModel = StateObject(wrappedValue: CodexLogViewModel(apiKey: apiKey))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+            Divider()
+            footer
+        }
+        .background(Color(nsColor: .textBackgroundColor))
+        .frame(minWidth: 960, minHeight: 540)
+        .task {
+            viewModel.loadIfNeeded()
+        }
+        .onChange(of: viewModel.items.map(\.id)) { ids in
+            expandedLogIDs.formIntersection(Set(ids))
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Label("Codex Log", systemImage: "doc.text.magnifyingglass")
+                .font(.system(size: 16, weight: .bold))
+
+            Text(viewModel.totalSummary)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 12)
+
+            Button(action: viewModel.reload) {
+                Label("刷新", systemImage: "arrow.clockwise")
+            }
+            .disabled(viewModel.isLoading)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+    }
+
+    private var content: some View {
+        ZStack {
+            if viewModel.items.isEmpty {
+                emptyState
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        CodexLogTableHeader()
+
+                        ForEach(viewModel.items) { item in
+                            Divider()
+                            CodexLogRow(
+                                item: item,
+                                isExpanded: expandedLogIDs.contains(item.id)
+                            ) {
+                                if expandedLogIDs.contains(item.id) {
+                                    expandedLogIDs.remove(item.id)
+                                } else {
+                                    expandedLogIDs.insert(item.id)
+                                }
+                            }
+                        }
+                        Divider()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                }
+            }
+
+            if viewModel.isLoading {
+                VStack(spacing: 8) {
+                    ProgressView()
+                    Text("加载日志...")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: viewModel.errorMessage == nil ? "doc.text" : "exclamationmark.triangle")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            Text(viewModel.errorMessage ?? "暂无日志")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(viewModel.errorMessage == nil ? Color.secondary : Color.red)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+
+            if viewModel.errorMessage != nil {
+                Button(action: viewModel.reload) {
+                    Label("重试", systemImage: "arrow.clockwise")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 12) {
+            Picker("每页", selection: $viewModel.pageSize) {
+                ForEach(CodexLogFormat.pageSizeOptions, id: \.self) { size in
+                    Text("\(size)").tag(size)
+                }
+            }
+            .frame(width: 110)
+            .onChange(of: viewModel.pageSize) { _ in
+                viewModel.load(page: 1)
+            }
+
+            Text(viewModel.pageSummary)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 12)
+
+            Button(action: viewModel.loadPreviousPage) {
+                Label("上一页", systemImage: "chevron.left")
+            }
+            .disabled(!viewModel.canGoPrevious)
+
+            Button(action: viewModel.loadNextPage) {
+                Label("下一页", systemImage: "chevron.right")
+            }
+            .disabled(!viewModel.canGoNext)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+    }
+}
+
+private struct CodexLogTableHeader: View {
+    var body: some View {
+        HStack(alignment: .center, spacing: 22) {
+            Text("时间")
+                .frame(width: 190, alignment: .leading)
+
+            Text("模型")
+                .frame(width: 150, alignment: .leading)
+
+            Text("Tokens")
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("费用")
+                .frame(width: 260, alignment: .leading)
+
+            Text("明细")
+                .frame(width: 70, alignment: .trailing)
+        }
+        .font(.system(size: 14, weight: .bold))
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 18)
+    }
+}
+
+private struct CodexLogRow: View {
+    let item: CodexLogItem
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            summaryRow
+
+            if isExpanded {
+                detailPanel
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 16)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var summaryRow: some View {
+        HStack(alignment: .center, spacing: 22) {
+            Text(CodexLogFormat.dateText(item.createdAt))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.88)
+                .frame(width: 190, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.model ?? "--")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Text(item.reasoning ?? "--")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(width: 150, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(CodexLogFormat.tokenText(item.totalTokens))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+
+                Text(CodexLogFormat.tokenSummary(for: item))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(CodexLogFormat.costText(item.totalCost))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+
+                Text(CodexLogFormat.costSummary(for: item))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+            .frame(width: 260, alignment: .leading)
+
+            Button(action: onToggle) {
+                Text(isExpanded ? "收起" : "明细")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background(Color.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .frame(width: 70, alignment: .trailing)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 17)
+    }
+
+    private var detailPanel: some View {
+        HStack(alignment: .top, spacing: 24) {
+            CodexLogDetailSection(
+                title: "Tokens",
+                rows: [
+                    CodexLogDetailRowData(title: "总计", value: CodexLogFormat.tokenText(item.totalTokens)),
+                    CodexLogDetailRowData(title: "输入", value: CodexLogFormat.billableInputTokens(for: item)),
+                    CodexLogDetailRowData(title: "缓存", value: CodexLogFormat.tokenText(item.inputTokensCached)),
+                    CodexLogDetailRowData(title: "输出", value: CodexLogFormat.outputDetailText(for: item)),
+                ]
+            )
+
+            CodexLogDetailSection(
+                title: "费用",
+                rows: [
+                    CodexLogDetailRowData(title: "总计", value: CodexLogFormat.costText(item.totalCost)),
+                    CodexLogDetailRowData(title: "输入", value: CodexLogFormat.costText(item.inputCost)),
+                    CodexLogDetailRowData(title: "缓存", value: CodexLogFormat.cacheCost(for: item)),
+                    CodexLogDetailRowData(title: "输出", value: CodexLogFormat.costText(item.outputCost)),
+                ]
+            )
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.8)
+        }
+    }
+}
+
+private struct CodexLogDetailRowData: Identifiable {
+    let title: String
+    let value: String
+
+    var id: String { title }
+}
+
+private struct CodexLogDetailSection: View {
+    let title: String
+    let rows: [CodexLogDetailRowData]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.primary)
+
+            ForEach(rows) { row in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(row.title)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, alignment: .leading)
+
+                    Spacer(minLength: 8)
+
+                    Text(row.value)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1141,6 +1772,7 @@ private struct LiquidGlassSummaryPanel: View {
     let onSetCodexAPIKey: (() -> Void)?
     let onSetAGIAPIKey: (() -> Void)?
     let onSetInterval: (() -> Void)?
+    let onOpenLogs: (() -> Void)?
     let onOpenDashboard: (() -> Void)?
     let onOpenPricing: (() -> Void)?
     let onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)?
@@ -1583,6 +2215,16 @@ private struct LiquidGlassSummaryPanel: View {
             )
 
             MenuActionButton(
+                title: "Log",
+                subtitle: "查看 Codex 日志",
+                systemImage: "doc.text.magnifyingglass",
+                shortcut: nil,
+                prominent: false,
+                action: onOpenLogs,
+                useInfoCardBackground: true
+            )
+
+            MenuActionButton(
                 title: "立即刷新",
                 subtitle: nil,
                 systemImage: "arrow.clockwise",
@@ -1790,6 +2432,9 @@ private final class StatusSummaryView: NSView {
     var onSetInterval: (() -> Void)? {
         didSet { updateRootView() }
     }
+    var onOpenLogs: (() -> Void)? {
+        didSet { updateRootView() }
+    }
     var onOpenDashboard: (() -> Void)? {
         didSet { updateRootView() }
     }
@@ -1829,6 +2474,7 @@ private final class StatusSummaryView: NSView {
                 onSetCodexAPIKey: nil,
                 onSetAGIAPIKey: nil,
                 onSetInterval: nil,
+                onOpenLogs: nil,
                 onOpenDashboard: nil,
                 onOpenPricing: nil,
                 onSelectDisplayStyle: nil,
@@ -1875,6 +2521,7 @@ private final class StatusSummaryView: NSView {
             onSetCodexAPIKey: onSetCodexAPIKey,
             onSetAGIAPIKey: onSetAGIAPIKey,
             onSetInterval: onSetInterval,
+            onOpenLogs: onOpenLogs,
             onOpenDashboard: onOpenDashboard,
             onOpenPricing: onOpenPricing,
             onSelectDisplayStyle: onSelectDisplayStyle,
@@ -2242,13 +2889,15 @@ private final class MCPHTTPServer: @unchecked Sendable {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unchecked Sendable {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, @unchecked Sendable {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let mcpSnapshotStore = MCPSnapshotStore()
 
     private let menu = NSMenu()
     private let summaryMenuItem = NSMenuItem()
     private let summaryView = StatusSummaryView(frame: NSRect(x: 0, y: 0, width: StatusSummaryView.preferredWidth, height: 246))
+    private var logWindowController: NSWindowController?
+    private var logWindowAPIKey: String?
 
     private var timer: Timer?
     private var currentSource: PackageSource = .codex
@@ -2397,6 +3046,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
                 self?.handleConfigureMCP()
             }
         }
+        summaryView.onOpenLogs = { [weak self] in
+            self?.performMenuAction {
+                self?.handleOpenLogs()
+            }
+        }
         summaryView.onQuit = { [weak self] in
             self?.performMenuAction {
                 self?.handleQuit()
@@ -2412,6 +3066,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
         guard isEmailVisible else { return }
         isEmailVisible = false
         renderSummaryView()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let logWindow = logWindowController?.window,
+              window === logWindow else {
+            return
+        }
+        logWindowController = nil
+        logWindowAPIKey = nil
     }
 
     private func startPolling() {
@@ -2732,6 +3396,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unche
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    @objc private func handleOpenLogs() {
+        guard !codexAPIKey.isEmpty else {
+            showError("请先设置 Codex API Key")
+            return
+        }
+
+        if let controller = logWindowController, logWindowAPIKey == codexAPIKey {
+            controller.showWindow(nil)
+            controller.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        logWindowController?.close()
+        logWindowController = nil
+        logWindowAPIKey = nil
+
+        let hostingView = NSHostingView(rootView: CodexLogWindowView(apiKey: codexAPIKey))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1080, height: 620),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Codex Log"
+        window.contentView = hostingView
+        window.minSize = NSSize(width: 960, height: 540)
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+
+        let controller = NSWindowController(window: window)
+        logWindowController = controller
+        logWindowAPIKey = codexAPIKey
+        controller.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func handleConfigureMCP() {
