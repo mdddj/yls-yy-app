@@ -1180,6 +1180,179 @@ private struct SourceSummaryGroupViewModel {
     let progress: Double?
     let footerText: String
     let isExpanded: Bool
+    let codexModelConfig: CodexModelConfigViewModel?
+}
+
+private enum CodexConfigOption {
+    static let models = [
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.3-codex",
+    ]
+
+    static let reasoningEfforts = [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+    ]
+}
+
+private struct CodexModelConfigViewModel {
+    let model: String
+    let reasoningEffort: String
+    let summary: String
+    let detail: String
+    let modelOptions: [String]
+    let reasoningEffortOptions: [String]
+    let isExpanded: Bool
+}
+
+private struct CodexModelConfig {
+    var model: String
+    var reasoningEffort: String
+    var readError: String?
+
+    static let defaultModel = "gpt-5.5"
+    static let defaultReasoningEffort = "medium"
+    static let configURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".codex/config.toml")
+
+    var viewModel: CodexModelConfigViewModel {
+        CodexModelConfigViewModel(
+            model: model,
+            reasoningEffort: reasoningEffort,
+            summary: "\(model) · \(reasoningEffort)",
+            detail: readError ?? "~/.codex/config.toml",
+            modelOptions: Self.options(including: model, defaults: CodexConfigOption.models),
+            reasoningEffortOptions: Self.options(including: reasoningEffort, defaults: CodexConfigOption.reasoningEfforts),
+            isExpanded: false
+        )
+    }
+
+    static func load() -> CodexModelConfig {
+        do {
+            let text = try String(contentsOf: configURL, encoding: .utf8)
+            return CodexModelConfig(
+                model: topLevelStringValue(for: "model", in: text) ?? defaultModel,
+                reasoningEffort: topLevelStringValue(for: "model_reasoning_effort", in: text) ?? defaultReasoningEffort,
+                readError: nil
+            )
+        } catch {
+            return CodexModelConfig(
+                model: defaultModel,
+                reasoningEffort: defaultReasoningEffort,
+                readError: "未找到 config.toml，保存时会创建"
+            )
+        }
+    }
+
+    func saving(model newModel: String? = nil, reasoningEffort newReasoningEffort: String? = nil) throws -> CodexModelConfig {
+        let updatedModel = newModel ?? model
+        let updatedReasoningEffort = newReasoningEffort ?? reasoningEffort
+        let manager = FileManager.default
+        try manager.createDirectory(
+            at: Self.configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let existingText = (try? String(contentsOf: Self.configURL, encoding: .utf8)) ?? ""
+        var updatedText = Self.updatingTopLevelString(
+            key: "model",
+            value: updatedModel,
+            in: existingText
+        )
+        updatedText = Self.updatingTopLevelString(
+            key: "model_reasoning_effort",
+            value: updatedReasoningEffort,
+            in: updatedText
+        )
+        try updatedText.write(to: Self.configURL, atomically: true, encoding: .utf8)
+
+        return CodexModelConfig(
+            model: updatedModel,
+            reasoningEffort: updatedReasoningEffort,
+            readError: nil
+        )
+    }
+
+    private static func options(including currentValue: String, defaults: [String]) -> [String] {
+        guard !currentValue.isEmpty, !defaults.contains(currentValue) else { return defaults }
+        return [currentValue] + defaults
+    }
+
+    private static func topLevelStringValue(for key: String, in text: String) -> String? {
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                return nil
+            }
+            if let value = stringValue(for: key, inLine: line) {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func updatingTopLevelString(key: String, value: String, in text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        let replacement = "\(key) = \"\(escapeTomlString(value))\""
+
+        for index in lines.indices {
+            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                lines.insert(replacement, at: index)
+                return lines.joined(separator: "\n")
+            }
+            if stringValue(for: key, inLine: lines[index]) != nil {
+                let indentation = lines[index].prefix { $0 == " " || $0 == "\t" }
+                lines[index] = "\(indentation)\(replacement)"
+                return lines.joined(separator: "\n")
+            }
+        }
+
+        if lines.count == 1, lines[0].isEmpty {
+            lines[0] = replacement
+        } else {
+            lines.append(replacement)
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private static func stringValue(for key: String, inLine line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix(key) else { return nil }
+        var rest = trimmed.dropFirst(key.count)
+        rest = rest.drop { $0 == " " || $0 == "\t" }
+        guard rest.first == "=" else { return nil }
+        rest = rest.dropFirst().drop { $0 == " " || $0 == "\t" }
+        guard rest.first == "\"" else { return nil }
+
+        var value = ""
+        var isEscaped = false
+        for character in rest.dropFirst() {
+            if isEscaped {
+                value.append(character)
+                isEscaped = false
+            } else if character == "\\" {
+                isEscaped = true
+            } else if character == "\"" {
+                return value
+            } else {
+                value.append(character)
+            }
+        }
+        return nil
+    }
+
+    private static func escapeTomlString(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
 }
 
 private struct WeightedMetricRowLayout: Layout {
@@ -1614,6 +1787,9 @@ private struct StyleChipButton: View {
 private struct SourceSummaryGroupView: View {
     let model: SourceSummaryGroupViewModel
     let onToggle: (() -> Void)?
+    let onToggleCodexModelConfig: (() -> Void)?
+    let onSelectCodexModel: ((String) -> Void)?
+    let onSelectCodexReasoningEffort: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1755,6 +1931,10 @@ private struct SourceSummaryGroupView: View {
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentMaterialSurface(cornerRadius: 13)
+
+                    if let codexModelConfig = model.codexModelConfig {
+                        codexModelConfigView(codexModelConfig)
+                    }
                 }
             }
         }
@@ -1762,6 +1942,86 @@ private struct SourceSummaryGroupView: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentMaterialSurface(cornerRadius: 16)
+    }
+
+    @ViewBuilder
+    private func codexModelConfigView(_ config: CodexModelConfigViewModel) -> some View {
+        HStack(spacing: 8) {
+            Text("Codex 模型")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 2)
+
+            Text(config.summary)
+                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Button(action: { onToggleCodexModelConfig?() }) {
+                Image(systemName: config.isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+        }
+
+        if config.isExpanded {
+            optionRow(
+                title: "模型",
+                options: config.modelOptions,
+                selected: config.model,
+                action: { onSelectCodexModel?($0) }
+            )
+
+            optionRow(
+                title: "思考",
+                options: config.reasoningEffortOptions,
+                selected: config.reasoningEffort,
+                action: { onSelectCodexReasoningEffort?($0) }
+            )
+        }
+    }
+
+    private func optionRow(
+        title: String,
+        options: [String],
+        selected: String,
+        action: @escaping (String) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 66), spacing: 6, alignment: .leading)],
+                alignment: .leading,
+                spacing: 6
+            ) {
+                ForEach(options, id: \.self) { option in
+                    Button(action: { action(option) }) {
+                        Text(option)
+                            .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(option == selected ? .primary : .secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.78)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule()
+                                    .fill(option == selected ? Color.primary.opacity(0.10) : Color.clear)
+                            )
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     private func metricCard(title: String, value: String, lineLimit: Int = 1) -> some View {
@@ -1807,6 +2067,9 @@ private struct LiquidGlassSummaryPanel: View {
     let onOpenPricing: (() -> Void)?
     let onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)?
     let onToggleSourceGroup: ((PackageSource) -> Void)?
+    let onToggleCodexModelConfig: (() -> Void)?
+    let onSelectCodexModel: ((String) -> Void)?
+    let onSelectCodexReasoningEffort: ((String) -> Void)?
     let onConfigureMCP: (() -> Void)?
     let onQuit: (() -> Void)?
 
@@ -1879,9 +2142,15 @@ private struct LiquidGlassSummaryPanel: View {
     private var dualContentPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(model.sourceGroups.enumerated()), id: \.element.source.rawValue) { _, group in
-                SourceSummaryGroupView(model: group) {
-                    onToggleSourceGroup?(group.source)
-                }
+                SourceSummaryGroupView(
+                    model: group,
+                    onToggle: {
+                        onToggleSourceGroup?(group.source)
+                    },
+                    onToggleCodexModelConfig: onToggleCodexModelConfig,
+                    onSelectCodexModel: onSelectCodexModel,
+                    onSelectCodexReasoningEffort: onSelectCodexReasoningEffort
+                )
             }
         }
     }
@@ -2479,6 +2748,15 @@ private final class StatusSummaryView: NSView {
     var onToggleSourceGroup: ((PackageSource) -> Void)? {
         didSet { updateRootView() }
     }
+    var onToggleCodexModelConfig: (() -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onSelectCodexModel: ((String) -> Void)? {
+        didSet { updateRootView() }
+    }
+    var onSelectCodexReasoningEffort: ((String) -> Void)? {
+        didSet { updateRootView() }
+    }
     var onConfigureMCP: (() -> Void)? {
         didSet { updateRootView() }
     }
@@ -2511,6 +2789,9 @@ private final class StatusSummaryView: NSView {
                 onOpenPricing: nil,
                 onSelectDisplayStyle: nil,
                 onToggleSourceGroup: nil,
+                onToggleCodexModelConfig: nil,
+                onSelectCodexModel: nil,
+                onSelectCodexReasoningEffort: nil,
                 onConfigureMCP: nil,
                 onQuit: nil
             )
@@ -2558,6 +2839,9 @@ private final class StatusSummaryView: NSView {
             onOpenPricing: onOpenPricing,
             onSelectDisplayStyle: onSelectDisplayStyle,
             onToggleSourceGroup: onToggleSourceGroup,
+            onToggleCodexModelConfig: onToggleCodexModelConfig,
+            onSelectCodexModel: onSelectCodexModel,
+            onSelectCodexReasoningEffort: onSelectCodexReasoningEffort,
             onConfigureMCP: onConfigureMCP,
             onQuit: onQuit
         )
@@ -2946,6 +3230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         .codex: true,
         .agi: true,
     ]
+    private var codexModelConfig = CodexModelConfig.load()
+    private var isCodexModelConfigExpanded = false
     private var mcpEnabled = true
     private var mcpPort: UInt16 = AppMeta.defaultMCPPort
     private lazy var mcpServer = MCPHTTPServer(port: mcpPort) { [weak self] in
@@ -3072,6 +3358,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         summaryView.onToggleSourceGroup = { [weak self] source in
             self?.toggleSourceGroup(source)
+        }
+        summaryView.onToggleCodexModelConfig = { [weak self] in
+            self?.toggleCodexModelConfig()
+        }
+        summaryView.onSelectCodexModel = { [weak self] model in
+            self?.selectCodexModel(model)
+        }
+        summaryView.onSelectCodexReasoningEffort = { [weak self] effort in
+            self?.selectCodexReasoningEffort(effort)
         }
         summaryView.onConfigureMCP = { [weak self] in
             self?.performMenuAction {
@@ -3531,6 +3826,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         renderStatusBar()
     }
 
+    private func toggleCodexModelConfig() {
+        isCodexModelConfigExpanded.toggle()
+        renderSummaryView()
+    }
+
+    private func selectCodexModel(_ model: String) {
+        guard model != codexModelConfig.model else { return }
+        saveCodexModelConfig { try codexModelConfig.saving(model: model) }
+    }
+
+    private func selectCodexReasoningEffort(_ effort: String) {
+        guard effort != codexModelConfig.reasoningEffort else { return }
+        saveCodexModelConfig { try codexModelConfig.saving(reasoningEffort: effort) }
+    }
+
+    private func saveCodexModelConfig(_ update: () throws -> CodexModelConfig) {
+        do {
+            codexModelConfig = try update()
+            renderSummaryView()
+        } catch {
+            showError("写入 Codex 配置失败: \(error.localizedDescription)")
+            codexModelConfig = CodexModelConfig.load()
+            renderSummaryView()
+        }
+    }
+
     private func togglePanelMode() {
         panelMode = panelMode == .statistics ? .settings : .statistics
         renderSummaryView()
@@ -3846,6 +4167,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             let progressValue = sourceState.usedPercent.map {
                 String(format: "%.2f%%", max(0, min(100, $0)))
             } ?? "--"
+            var codexConfigViewModel: CodexModelConfigViewModel?
+            if source == .codex {
+                let configViewModel = codexModelConfig.viewModel
+                codexConfigViewModel = CodexModelConfigViewModel(
+                    model: configViewModel.model,
+                    reasoningEffort: configViewModel.reasoningEffort,
+                    summary: configViewModel.summary,
+                    detail: configViewModel.detail,
+                    modelOptions: configViewModel.modelOptions,
+                    reasoningEffortOptions: configViewModel.reasoningEffortOptions,
+                    isExpanded: isCodexModelConfigExpanded
+                )
+            }
 
             return SourceSummaryGroupViewModel(
                 source: source,
@@ -3862,7 +4196,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 progressValue: progressValue,
                 progress: sourceState.usedPercent.map { max(0, min(100, $0)) / 100 },
                 footerText: sourceState.message,
-                isExpanded: sourceGroupExpanded[source] ?? true
+                isExpanded: sourceGroupExpanded[source] ?? true,
+                codexModelConfig: codexConfigViewModel
             )
         }
 
