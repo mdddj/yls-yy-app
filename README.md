@@ -5,12 +5,12 @@
 ## 应用展示
 
 <p align="center">
-  <img src="images/yls_logo.png" alt="伊莉丝Codex账户监控助手 Logo" width="120" />
+  <img src="images/yls_logo.png" alt="伊莉思Codex账户监控助手 Logo" width="120" />
 </p>
 
 <p align="center">
-  <img src="images/截图亮色.png" alt="伊莉丝Codex账户监控助手亮色截图" width="320" />
-  <img src="images/截图暗色.png" alt="伊莉丝Codex账户监控助手暗色截图" width="320" />
+  <img src="images/截图亮色.png" alt="伊莉思Codex账户监控助手亮色截图" width="320" />
+  <img src="images/截图暗色.png" alt="伊莉思Codex账户监控助手暗色截图" width="320" />
 </p>
 
 ## 功能
@@ -137,7 +137,7 @@ git push origin v0.1.0
 ```
 
 3. Actions 会自动生成可下载文件：
-   - Release Assets：`伊莉丝Codex账户监控助手.dmg`
+   - Release Assets：`伊莉思Codex账户监控助手.dmg`
    - Workflow Artifacts：`macos-app-bundle-and-dmg`（包含 `.app` 与 `.dmg`）
    - 产物默认包含 `arm64 + x86_64` 通用二进制，可直接运行在 Apple Silicon 和 Intel Mac 上
 
@@ -149,8 +149,8 @@ scripts/build_macos_app.sh
 
 输出在 `dist/` 目录：
 
-- `伊莉丝Codex账户监控助手.app`
-- `伊莉丝Codex账户监控助手.dmg`
+- `伊莉思Codex账户监控助手.app`
+- `伊莉思Codex账户监控助手.dmg`
 
 默认产出 `arm64 + x86_64` 通用包；如果你只想打单架构，可以显式指定：
 

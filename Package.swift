@@ -14,9 +14,15 @@ let package = Package(
             targets: ["yls-yy-app"]
         ),
     ],
+    dependencies: [
+        .package(url: "https://github.com/sindresorhus/LaunchAtLogin-Modern", from: "1.1.0"),
+    ],
     targets: [
         .executableTarget(
-            name: "yls-yy-app"
+            name: "yls-yy-app",
+            dependencies: [
+                .product(name: "LaunchAtLogin", package: "LaunchAtLogin-Modern"),
+            ]
         ),
     ]
 )

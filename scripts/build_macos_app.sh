@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DISPLAY_NAME="${APP_DISPLAY_NAME:-伊莉丝Codex账户监控助手}"
-APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-伊莉丝Codex账户监控助手}"
+APP_DISPLAY_NAME="${APP_DISPLAY_NAME:-伊莉思Codex账户监控助手}"
+APP_BUNDLE_NAME="${APP_BUNDLE_NAME:-伊莉思Codex账户监控助手}"
 EXECUTABLE_NAME="${EXECUTABLE_NAME:-yls-yy-app}"
 BUNDLE_ID="${BUNDLE_ID:-com.yls.codex-monitor}"
 APP_VERSION="${APP_VERSION:-0.1.0}"

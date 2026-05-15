@@ -23,7 +23,7 @@ jobs:
 
       - name: Verify universal app bundle
         run: |
-          APP_BINARY="dist/伊莉丝Codex账户监控助手.app/Contents/MacOS/yls-yy-app"
+          APP_BINARY="dist/伊莉思Codex账户监控助手.app/Contents/MacOS/yls-yy-app"
           ARCHS="$(lipo -archs "$APP_BINARY")"
           echo "Packaged architectures: $ARCHS"
           [[ "$ARCHS" == *"arm64"* && "$ARCHS" == *"x86_64"* ]]

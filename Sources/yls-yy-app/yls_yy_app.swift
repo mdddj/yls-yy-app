@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import LaunchAtLogin
 import Network
 import SwiftUI
 
@@ -17,7 +18,7 @@ private enum DefaultsKey {
 }
 
 private enum AppMeta {
-    static let displayName = "伊莉丝账户监控助手"
+    static let displayName = "伊莉思账户监控助手"
     static let mcpHost = "127.0.0.1"
     static let defaultMCPPort: UInt16 = 8765
     static let stackedStatusMinWidth: CGFloat = 44
@@ -1534,6 +1535,35 @@ private struct MenuActionButton: View {
     }
 }
 
+private struct LaunchAtLoginSettingsRow: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "poweron")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .background(
+                    Circle()
+                        .fill(.thinMaterial)
+                )
+
+            Text("自动启动")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            LaunchAtLogin.Toggle()
+                .labelsHidden()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentMaterialSurface(cornerRadius: 15)
+    }
+}
+
 private struct StyleChipButton: View {
     let style: StatusDisplayStyle
     let isSelected: Bool
@@ -2214,6 +2244,8 @@ private struct LiquidGlassSummaryPanel: View {
                 useInfoCardBackground: true
             )
 
+            LaunchAtLoginSettingsRow()
+
             MenuActionButton(
                 title: "Log",
                 subtitle: "查看 Codex 日志",
@@ -2794,7 +2826,7 @@ private final class MCPHTTPServer: @unchecked Sendable {
             result = [
                 "tools": [[
                     "name": toolName,
-                    "description": "获取伊莉丝 Codex 账户监控应用的最新本地快照数据",
+                    "description": "获取伊莉思 Codex 账户监控应用的最新本地快照数据",
                     "inputSchema": [
                         "type": "object",
                         "properties": [:]
@@ -2825,7 +2857,7 @@ private final class MCPHTTPServer: @unchecked Sendable {
                 "resources": [[
                     "uri": resourceURI,
                     "name": "Codex Monitor Snapshot",
-                    "description": "伊莉丝 Codex 账户监控的最新本地快照",
+                    "description": "伊莉思 Codex 账户监控的最新本地快照",
                     "mimeType": "application/json"
                 ]]
             ]
