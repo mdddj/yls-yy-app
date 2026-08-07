@@ -37,6 +37,16 @@ jobs:
             dist/*.dmg
           if-no-files-found: error
 
+      - name: Remove existing release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ASSET_NAME="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[] | select(.name | endswith(".dmg")) | .name' 2>/dev/null || true)"
+          if [[ -n "$ASSET_NAME" ]]; then
+            echo "Removing existing asset: $ASSET_NAME"
+            gh release delete-asset "$GITHUB_REF_NAME" "$ASSET_NAME" --yes
+          fi
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
