@@ -1456,6 +1456,17 @@ private struct StatusSummaryViewModel {
     let canOpenPricing: Bool
     let dashboardActionTitle: String
     let sourceGroups: [SourceSummaryGroupViewModel]
+    let codexAccounts: [CodexAccountSummaryViewModel]
+}
+
+private struct CodexAccountSummaryViewModel: Identifiable {
+    let id: String
+    let name: String
+    let remaining: String
+    let usage: String
+    let statusText: String
+    let statusTone: SummaryStatusTone
+    let isActive: Bool
 }
 
 private struct SummaryPackageItem {
@@ -1483,6 +1494,7 @@ private struct SourceSummaryGroupViewModel {
     let footerText: String
     let isExpanded: Bool
     let codexModelConfig: CodexModelConfigViewModel?
+    let codexAccounts: [CodexAccountSummaryViewModel]
 }
 
 private enum CodexConfigOption {
@@ -1809,7 +1821,8 @@ private extension StatusSummaryViewModel {
         canOpenDashboard: true,
         canOpenPricing: true,
         dashboardActionTitle: PackageSource.codex.openDashboardTitle,
-        sourceGroups: []
+        sourceGroups: [],
+        codexAccounts: []
     )
 }
 
@@ -2086,12 +2099,99 @@ private struct StyleChipButton: View {
     }
 }
 
+private struct CodexAccountListSection: View {
+    let title: String?
+    let accounts: [CodexAccountSummaryViewModel]
+    let onSelect: ((String) -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let title {
+                Text(title)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(accounts) { account in
+                    accountRow(account)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func accountRow(_ account: CodexAccountSummaryViewModel) -> some View {
+        Button(action: { onSelect?(account.id) }) {
+            HStack(alignment: .center, spacing: 7) {
+                Image(systemName: account.isActive ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(account.isActive ? Color.accentColor : Color.secondary)
+                    .frame(width: 14)
+
+                Text(account.name)
+                    .font(.system(size: 11.5, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                    .frame(width: 74, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 1.5) {
+                    Text("余: \(account.remaining)")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+
+                    Text("用: \(account.usage)")
+                        .font(.system(size: 9.5, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(account.statusText)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(account.statusTone.swiftUIColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(account.statusTone.swiftUIFillColor)
+                    .overlay {
+                        Capsule().stroke(account.statusTone.swiftUIBorderColor, lineWidth: 0.8)
+                    }
+                    .clipShape(Capsule())
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentMaterialSurface(
+                cornerRadius: 12,
+                tint: account.isActive
+                    ? Color.accentColor.opacity(0.10)
+                    : .primary.opacity(0.03)
+            )
+            .overlay {
+                if account.isActive {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.35), lineWidth: 0.8)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .help(account.isActive ? "该账号当前显示在状态栏" : "点击切换为状态栏显示的账号")
+    }
+}
+
 private struct SourceSummaryGroupView: View {
     let model: SourceSummaryGroupViewModel
     let onToggle: (() -> Void)?
     let onToggleCodexModelConfig: (() -> Void)?
     let onSelectCodexModel: ((String) -> Void)?
     let onSelectCodexReasoningEffort: ((String) -> Void)?
+    let onSelectCodexAccount: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2234,6 +2334,14 @@ private struct SourceSummaryGroupView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentMaterialSurface(cornerRadius: 13)
 
+                    if !model.codexAccounts.isEmpty {
+                        CodexAccountListSection(
+                            title: "全部 Codex 账号（\(model.codexAccounts.count)）",
+                            accounts: model.codexAccounts,
+                            onSelect: onSelectCodexAccount
+                        )
+                    }
+
                     if let codexModelConfig = model.codexModelConfig {
                         codexModelConfigView(codexModelConfig)
                     }
@@ -2369,6 +2477,7 @@ private struct LiquidGlassSummaryPanel: View {
     let onOpenPricing: (() -> Void)?
     let onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)?
     let onToggleSourceGroup: ((PackageSource) -> Void)?
+    let onSelectCodexAccount: ((String) -> Void)?
     let onToggleCodexModelConfig: (() -> Void)?
     let onSelectCodexModel: ((String) -> Void)?
     let onSelectCodexReasoningEffort: ((String) -> Void)?
@@ -2436,6 +2545,13 @@ private struct LiquidGlassSummaryPanel: View {
     private var contentPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             heroPanel
+            if !model.codexAccounts.isEmpty {
+                CodexAccountListSection(
+                    title: "全部 Codex 账号（\(model.codexAccounts.count)）",
+                    accounts: model.codexAccounts,
+                    onSelect: onSelectCodexAccount
+                )
+            }
             packageSection
             progressSection
         }
@@ -2451,7 +2567,8 @@ private struct LiquidGlassSummaryPanel: View {
                     },
                     onToggleCodexModelConfig: onToggleCodexModelConfig,
                     onSelectCodexModel: onSelectCodexModel,
-                    onSelectCodexReasoningEffort: onSelectCodexReasoningEffort
+                    onSelectCodexReasoningEffort: onSelectCodexReasoningEffort,
+                    onSelectCodexAccount: onSelectCodexAccount
                 )
             }
         }
@@ -3050,6 +3167,9 @@ private final class StatusSummaryView: NSView {
     var onToggleSourceGroup: ((PackageSource) -> Void)? {
         didSet { updateRootView() }
     }
+    var onSelectCodexAccount: ((String) -> Void)? {
+        didSet { updateRootView() }
+    }
     var onToggleCodexModelConfig: (() -> Void)? {
         didSet { updateRootView() }
     }
@@ -3091,6 +3211,7 @@ private final class StatusSummaryView: NSView {
                 onOpenPricing: nil,
                 onSelectDisplayStyle: nil,
                 onToggleSourceGroup: nil,
+                onSelectCodexAccount: nil,
                 onToggleCodexModelConfig: nil,
                 onSelectCodexModel: nil,
                 onSelectCodexReasoningEffort: nil,
@@ -3141,6 +3262,7 @@ private final class StatusSummaryView: NSView {
             onOpenPricing: onOpenPricing,
             onSelectDisplayStyle: onSelectDisplayStyle,
             onToggleSourceGroup: onToggleSourceGroup,
+            onSelectCodexAccount: onSelectCodexAccount,
             onToggleCodexModelConfig: onToggleCodexModelConfig,
             onSelectCodexModel: onSelectCodexModel,
             onSelectCodexReasoningEffort: onSelectCodexReasoningEffort,
@@ -3171,12 +3293,22 @@ private struct MCPServerSnapshot: Encodable {
     let pollIntervalSeconds: Double
     let displayStyle: String
     let packageItems: [MCPPackageItem]
+    let codexAccounts: [MCPCodexAccount]
 }
 
 private struct MCPPackageItem: Encodable {
     let title: String
     let subtitle: String
     let badgeText: String
+}
+
+private struct MCPCodexAccount: Encodable {
+    let id: String
+    let name: String
+    let remaining: String
+    let usage: String
+    let status: String
+    let isActive: Bool
 }
 
 private final class MCPSnapshotStore: @unchecked Sendable {
@@ -3694,6 +3826,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         summaryView.onToggleSourceGroup = { [weak self] source in
             self?.toggleSourceGroup(source)
         }
+        summaryView.onSelectCodexAccount = { [weak self] accountID in
+            self?.selectCodexAccount(id: accountID)
+        }
         summaryView.onToggleCodexModelConfig = { [weak self] in
             self?.toggleCodexModelConfig()
         }
@@ -3948,6 +4083,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return "等待中"
     }
 
+    private func codexAccountStatusTone(_ state: SourceMonitorState?) -> SummaryStatusTone {
+        switch codexAccountStatusText(state) {
+        case "在线":
+            return .success
+        case "未配置":
+            return .warning
+        case "异常":
+            return .critical
+        default:
+            return .neutral
+        }
+    }
+
+    private func codexAccountSummaries() -> [CodexAccountSummaryViewModel] {
+        let activeID = activeCodexAccount?.id
+        return codexAccounts.map { account in
+            let state = codexStates[account.id]
+            return CodexAccountSummaryViewModel(
+                id: account.id,
+                name: account.name,
+                remaining: state?.remaining ?? "--",
+                usage: state?.usage ?? "--",
+                statusText: codexAccountStatusText(state),
+                statusTone: codexAccountStatusTone(state),
+                isActive: account.id == activeID
+            )
+        }
+    }
+
     private func pushCodexAccountStatuses() {
         guard let viewModel = codexAccountsWindowController?.viewModel else { return }
         viewModel.statuses = Dictionary(
@@ -4069,6 +4233,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func toggleSourceGroup(_ source: PackageSource) {
         sourceGroupExpanded[source] = !(sourceGroupExpanded[source] ?? true)
         renderSummaryView()
+    }
+
+    private func selectCodexAccount(id: String) {
+        guard codexAccounts.contains(where: { $0.id == id }),
+              id != activeCodexAccountID else { return }
+        activeCodexAccountID = id
+        saveConfiguration()
+        codexAccountsWindowController?.viewModel.activeID = id
+        renderSummaryView()
+        renderStatusBar()
+        pushCodexAccountStatuses()
+        if let account = activeCodexAccount {
+            refreshCodexAccount(account)
+        }
     }
 
     private func primaryStatusSource() -> PackageSource {
@@ -4353,6 +4531,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             displayStyle: displayStyle.title,
             packageItems: primaryState.packageItems.map {
                 MCPPackageItem(title: $0.title, subtitle: $0.subtitle, badgeText: $0.badgeText)
+            },
+            codexAccounts: codexAccounts.map { account in
+                let state = codexStates[account.id]
+                return MCPCodexAccount(
+                    id: account.id,
+                    name: account.name,
+                    remaining: state?.remaining ?? "--",
+                    usage: state?.usage ?? "--",
+                    status: codexAccountStatusText(state),
+                    isActive: account.id == activeCodexAccount?.id
+                )
             }
         )
         return (try? JSONEncoder().encode(snapshot)) ?? Data("{}".utf8)
@@ -4668,7 +4857,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 progress: sourceState.usedPercent.map { max(0, min(100, $0)) / 100 },
                 footerText: sourceState.message,
                 isExpanded: sourceGroupExpanded[source] ?? true,
-                codexModelConfig: codexConfigViewModel
+                codexModelConfig: codexConfigViewModel,
+                codexAccounts: source == .codex ? codexAccountSummaries() : []
             )
         }
 
@@ -4704,7 +4894,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 canOpenDashboard: activeSource.dashboardURL != nil,
                 canOpenPricing: activeSource.pricingURL != nil,
                 dashboardActionTitle: activeSource.openDashboardTitle,
-                sourceGroups: sourceGroups
+                sourceGroups: sourceGroups,
+                codexAccounts: activeSource == .codex ? codexAccountSummaries() : []
             )
         )
         summaryView.frame = NSRect(origin: .zero, size: summaryView.intrinsicContentSize)
