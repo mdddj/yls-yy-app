@@ -8,6 +8,8 @@ import SwiftUI
 private enum DefaultsKey {
     static let apiKey = "api_key"
     static let codexAPIKey = "codex_api_key"
+    static let codexAccounts = "codex_accounts"
+    static let codexActiveAccountID = "codex_active_account_id"
     static let agiAPIKey = "agi_api_key"
     static let selectedSource = "selected_source"
     static let statisticsDisplayMode = "statistics_display_mode"
@@ -280,6 +282,26 @@ private enum StatisticsDisplayMode: Int, CaseIterable {
             return "双显模式"
         }
     }
+}
+
+private struct CodexAccount: Identifiable, Codable, Equatable {
+    let id: String
+    var name: String
+    var apiKey: String
+}
+
+private func normalizedAPIKey(_ rawValue: String) -> String {
+    let components = rawValue
+        .split(whereSeparator: \.isWhitespace)
+        .map(String.init)
+
+    guard !components.isEmpty else { return "" }
+
+    if components[0].lowercased() == "bearer" {
+        return components.dropFirst().first ?? ""
+    }
+
+    return components[0]
 }
 
 private struct APIEnvelope: Decodable {
@@ -1095,6 +1117,285 @@ private struct CodexLogDetailSection: View {
     }
 }
 
+@MainActor
+private final class CodexAccountsWindowViewModel: ObservableObject, @unchecked Sendable {
+    @Published var accounts: [CodexAccount]
+    @Published var activeID: String?
+    @Published var statuses: [String: String] = [:]
+
+    private let onChange: ([CodexAccount], String?, Bool) -> Void
+
+    init(
+        accounts: [CodexAccount],
+        activeID: String?,
+        onChange: @escaping ([CodexAccount], String?, Bool) -> Void
+    ) {
+        self.accounts = accounts
+        self.activeID = activeID
+        self.onChange = onChange
+    }
+
+    func addAccount(name: String, key: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { return }
+
+        let account = CodexAccount(
+            id: UUID().uuidString,
+            name: trimmedName.isEmpty ? "账号 \(accounts.count + 1)" : trimmedName,
+            apiKey: normalizedAPIKey(trimmedKey)
+        )
+        accounts.append(account)
+        if activeID == nil {
+            activeID = account.id
+        }
+        commit()
+    }
+
+    func removeAccount(id: String) {
+        accounts.removeAll { $0.id == id }
+        if activeID == id {
+            activeID = accounts.first?.id
+        }
+        commit()
+    }
+
+    func selectActive(id: String) {
+        guard accounts.contains(where: { $0.id == id }) else { return }
+        guard activeID != id else { return }
+        activeID = id
+        commit()
+    }
+
+    func renameAccount(id: String, name: String) {
+        guard let index = accounts.firstIndex(where: { $0.id == id }),
+              accounts[index].name != name else { return }
+        accounts[index].name = name
+        commit(refresh: false)
+    }
+
+    func commit(refresh: Bool = true) {
+        onChange(accounts, activeID, refresh)
+    }
+}
+
+private struct CodexAccountsWindowView: View {
+    @ObservedObject var viewModel: CodexAccountsWindowViewModel
+    @State private var newAccountName = ""
+    @State private var newAccountKey = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+            Divider()
+            accountList
+            Divider()
+            addSection
+        }
+        .padding(16)
+        .frame(width: 560)
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Label("Codex 账号", systemImage: "person.2.badge.key")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 8)
+
+            Text("状态栏显示: \(activeAccountName)")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private var activeAccountName: String {
+        viewModel.accounts.first { $0.id == viewModel.activeID }?.name ?? "未设置"
+    }
+
+    @ViewBuilder
+    private var accountList: some View {
+        if viewModel.accounts.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "key.slash")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.secondary)
+
+                Text("暂无账号，请在下方添加 Codex Key")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 140)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(viewModel.accounts) { account in
+                        accountRow(account)
+                    }
+                }
+                .padding(1)
+            }
+            .frame(minHeight: 150, maxHeight: 280)
+        }
+    }
+
+    private func accountRow(_ account: CodexAccount) -> some View {
+        let isActive = account.id == viewModel.activeID
+        let statusText = viewModel.statuses[account.id] ?? "等待中"
+
+        return HStack(spacing: 10) {
+            Button(action: { viewModel.selectActive(id: account.id) }) {
+                HStack(spacing: 6) {
+                    Image(systemName: isActive ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(isActive ? Color.accentColor : Color.secondary)
+
+                    Text("显示")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isActive ? .primary : .secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule()
+                        .fill(isActive ? Color.accentColor.opacity(0.12) : Color.clear)
+                )
+                .overlay {
+                    if isActive {
+                        Capsule().stroke(Color.accentColor.opacity(0.3), lineWidth: 0.8)
+                    }
+                }
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("在状态栏显示该账号")
+
+            TextField("账号名称", text: nameBinding(for: account))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 150)
+
+            Text(maskedKey(account.apiKey))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Spacer(minLength: 6)
+
+            Text(statusText)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(statusColor(statusText))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(statusColor(statusText).opacity(0.12))
+                .clipShape(Capsule())
+
+            Button(role: .destructive, action: { viewModel.removeAccount(id: account.id) }) {
+                Image(systemName: "trash")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .help("删除该账号")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var addSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("添加账号")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.primary)
+
+            HStack(spacing: 8) {
+                TextField("名称（可选）", text: $newAccountName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 150)
+
+                TextField("Codex API Key（Bearer Token）", text: $newAccountKey)
+                    .textFieldStyle(.roundedBorder)
+
+                Button(action: addAccount) {
+                    Label("添加", systemImage: "plus")
+                }
+                .disabled(newAccountKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func addAccount() {
+        viewModel.addAccount(name: newAccountName, key: newAccountKey)
+        newAccountName = ""
+        newAccountKey = ""
+    }
+
+    private func nameBinding(for account: CodexAccount) -> Binding<String> {
+        Binding(
+            get: { account.name },
+            set: { viewModel.renameAccount(id: account.id, name: $0) }
+        )
+    }
+
+    private func maskedKey(_ key: String) -> String {
+        guard !key.isEmpty else { return "未配置 Key" }
+        guard key.count > 8 else { return "****" }
+        return "\(key.prefix(4))••••••\(key.suffix(4))"
+    }
+
+    private func statusColor(_ text: String) -> Color {
+        switch text {
+        case "在线":
+            return .green
+        case "异常":
+            return .red
+        case "未配置":
+            return .orange
+        default:
+            return .secondary
+        }
+    }
+}
+
+@MainActor
+private final class CodexAccountsWindowController: NSWindowController, NSWindowDelegate {
+    let viewModel: CodexAccountsWindowViewModel
+    var onClose: (() -> Void)?
+
+    init(viewModel: CodexAccountsWindowViewModel) {
+        self.viewModel = viewModel
+        let hostingView = NSHostingView(rootView: CodexAccountsWindowView(viewModel: viewModel))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Codex 账号管理"
+        window.contentView = hostingView
+        window.isReleasedWhenClosed = false
+        window.center()
+        super.init(window: window)
+        window.delegate = self
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose?()
+    }
+}
+
 private enum SummaryStatusTone: Equatable {
     case neutral
     case success
@@ -1145,7 +1446,7 @@ private struct StatusSummaryViewModel {
     let progressValue: String
     let progress: Double?
     let footerText: String
-    let codexAPIKeyStatusText: String
+    let codexAccountsStatusText: String
     let agiAPIKeyStatusText: String
     let pollIntervalText: String
     let displayStyle: StatusDisplayStyle
@@ -1166,6 +1467,7 @@ private struct SummaryPackageItem {
 
 private struct SourceSummaryGroupViewModel {
     let source: PackageSource
+    let displayTitle: String
     let statusText: String
     let statusTone: SummaryStatusTone
     let usageLabel: String
@@ -1498,7 +1800,7 @@ private extension StatusSummaryViewModel {
         progressValue: "--",
         progress: nil,
         footerText: "等待数据",
-        codexAPIKeyStatusText: "未配置",
+        codexAccountsStatusText: "未配置",
         agiAPIKeyStatusText: "未配置",
         pollIntervalText: "--",
         displayStyle: .remaining,
@@ -1800,7 +2102,7 @@ private struct SourceSummaryGroupView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 12)
 
-                    Text(model.source.title)
+                    Text(model.displayTitle)
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(.primary)
 
@@ -2059,8 +2361,8 @@ private struct LiquidGlassSummaryPanel: View {
     let onRefresh: (() -> Void)?
     let onSelectStatisticsMode: (() -> Void)?
     let onSelectSource: (() -> Void)?
-    let onSetCodexAPIKey: (() -> Void)?
     let onSetAGIAPIKey: (() -> Void)?
+    let onManageCodexAccounts: (() -> Void)?
     let onSetInterval: (() -> Void)?
     let onOpenLogs: (() -> Void)?
     let onOpenDashboard: (() -> Void)?
@@ -2474,12 +2776,12 @@ private struct LiquidGlassSummaryPanel: View {
             )
 
             MenuActionButton(
-                title: PackageSource.codex.keyButtonTitle,
-                subtitle: model.codexAPIKeyStatusText,
-                systemImage: "key.horizontal",
+                title: "Codex 账号",
+                subtitle: model.codexAccountsStatusText,
+                systemImage: "person.2.badge.key",
                 shortcut: "⌘K",
                 prominent: false,
-                action: onSetCodexAPIKey,
+                action: onManageCodexAccounts,
                 useInfoCardBackground: true
             )
 
@@ -2724,10 +3026,10 @@ private final class StatusSummaryView: NSView {
     var onSelectSource: (() -> Void)? {
         didSet { updateRootView() }
     }
-    var onSetCodexAPIKey: (() -> Void)? {
+    var onSetAGIAPIKey: (() -> Void)? {
         didSet { updateRootView() }
     }
-    var onSetAGIAPIKey: (() -> Void)? {
+    var onManageCodexAccounts: (() -> Void)? {
         didSet { updateRootView() }
     }
     var onSetInterval: (() -> Void)? {
@@ -2781,8 +3083,8 @@ private final class StatusSummaryView: NSView {
                 onRefresh: nil,
                 onSelectStatisticsMode: nil,
                 onSelectSource: nil,
-                onSetCodexAPIKey: nil,
                 onSetAGIAPIKey: nil,
+                onManageCodexAccounts: nil,
                 onSetInterval: nil,
                 onOpenLogs: nil,
                 onOpenDashboard: nil,
@@ -2831,8 +3133,8 @@ private final class StatusSummaryView: NSView {
             onRefresh: onRefresh,
             onSelectStatisticsMode: onSelectStatisticsMode,
             onSelectSource: onSelectSource,
-            onSetCodexAPIKey: onSetCodexAPIKey,
             onSetAGIAPIKey: onSetAGIAPIKey,
+            onManageCodexAccounts: onManageCodexAccounts,
             onSetInterval: onSetInterval,
             onOpenLogs: onOpenLogs,
             onOpenDashboard: onOpenDashboard,
@@ -3218,8 +3520,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var timer: Timer?
     private var currentSource: PackageSource = .codex
     private var statisticsDisplayMode: StatisticsDisplayMode = .single
-    private var codexAPIKey: String = ""
-    private var codexAPIKeyOrigin: APIKeyOrigin = .none
+    private var codexAccounts: [CodexAccount] = []
+    private var activeCodexAccountID: String?
+    private var codexStates: [String: SourceMonitorState] = [:]
     private var agiAPIKey: String = ""
     private var agiAPIKeyOrigin: APIKeyOrigin = .none
     private var pollInterval: TimeInterval = 5
@@ -3239,6 +3542,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return self.mcpSnapshotStore.get()
     }
     private var isEmailVisible = false
+    private var codexAccountsWindowController: CodexAccountsWindowController?
+
+    private var activeCodexAccount: CodexAccount? {
+        guard !codexAccounts.isEmpty else { return nil }
+        if let activeID = activeCodexAccountID,
+           let account = codexAccounts.first(where: { $0.id == activeID }) {
+            return account
+        }
+        return codexAccounts[0]
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -3261,9 +3574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         currentSource = PackageSource(rawValue: defaults.string(forKey: DefaultsKey.selectedSource) ?? "") ?? .codex
         statisticsDisplayMode = StatisticsDisplayMode(rawValue: defaults.integer(forKey: DefaultsKey.statisticsDisplayMode)) ?? .single
 
-        let codexResolution = resolveAPIKey(for: .codex, defaults: defaults)
-        codexAPIKey = codexResolution.value
-        codexAPIKeyOrigin = codexResolution.origin
+        loadCodexAccounts(defaults: defaults)
 
         let agiResolution = resolveAPIKey(for: .agi, defaults: defaults)
         agiAPIKey = agiResolution.value
@@ -3286,10 +3597,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         rebuildSourceStates()
     }
 
+    private func loadCodexAccounts(defaults: UserDefaults) {
+        var accounts: [CodexAccount] = []
+        if let data = defaults.data(forKey: DefaultsKey.codexAccounts),
+           let decoded = try? JSONDecoder().decode([CodexAccount].self, from: data),
+           !decoded.isEmpty {
+            accounts = decoded
+        } else {
+            let legacy = resolveAPIKey(for: .codex, defaults: defaults).value
+            if !legacy.isEmpty {
+                accounts = [
+                    CodexAccount(id: UUID().uuidString, name: "账号 1", apiKey: legacy)
+                ]
+            }
+        }
+        codexAccounts = accounts
+        activeCodexAccountID = defaults.string(forKey: DefaultsKey.codexActiveAccountID)
+        if activeCodexAccountID == nil
+            || !codexAccounts.contains(where: { $0.id == activeCodexAccountID }) {
+            activeCodexAccountID = codexAccounts.first?.id
+        }
+    }
+
     private func saveConfiguration() {
         let defaults = UserDefaults.standard
-        defaults.set(codexAPIKey, forKey: DefaultsKey.apiKey)
-        defaults.set(codexAPIKey, forKey: DefaultsKey.codexAPIKey)
+        if let data = try? JSONEncoder().encode(codexAccounts) {
+            defaults.set(data, forKey: DefaultsKey.codexAccounts)
+        }
+        defaults.set(activeCodexAccountID, forKey: DefaultsKey.codexActiveAccountID)
         defaults.set(agiAPIKey, forKey: DefaultsKey.agiAPIKey)
         defaults.set(currentSource.rawValue, forKey: DefaultsKey.selectedSource)
         defaults.set(statisticsDisplayMode.rawValue, forKey: DefaultsKey.statisticsDisplayMode)
@@ -3328,9 +3663,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 self?.handleSelectSource()
             }
         }
-        summaryView.onSetCodexAPIKey = { [weak self] in
+        summaryView.onManageCodexAccounts = { [weak self] in
             self?.performMenuAction {
-                self?.handleSetAPIKey(for: .codex)
+                self?.handleManageCodexAccounts()
             }
         }
         summaryView.onSetAGIAPIKey = { [weak self] in
@@ -3471,6 +3806,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func handleSetAPIKey(for source: PackageSource) {
+        guard source == .agi else { return }
         let alert = NSAlert()
         alert.messageText = source.apiKeyDialogTitle
         alert.informativeText = source.apiKeyDialogHint
@@ -3479,14 +3815,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         alert.addButton(withTitle: "取消")
 
         let input = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
-        input.stringValue = apiKeyValue(for: source)
+        input.stringValue = agiAPIKey
         alert.accessoryView = input
 
         let response = alert.runModal()
         guard response == .alertFirstButtonReturn else { return }
 
         let token = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        setAPIKey(token, for: source)
+        agiAPIKey = normalizedAPIKey(token)
+        agiAPIKeyOrigin = .userDefaults
         saveConfiguration()
         if source == currentSource || statisticsDisplayMode == .dual {
             setupStatusButton()
@@ -3496,10 +3833,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
+    private func handleManageCodexAccounts() {
+        if let controller = codexAccountsWindowController {
+            controller.showWindow(nil)
+            controller.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let viewModel = CodexAccountsWindowViewModel(
+            accounts: codexAccounts,
+            activeID: activeCodexAccountID
+        ) { [weak self] accounts, activeID, refresh in
+            self?.applyCodexAccounts(accounts, activeID: activeID, refresh: refresh)
+        }
+        let controller = CodexAccountsWindowController(viewModel: viewModel)
+        controller.onClose = { [weak self] in
+            self?.codexAccountsWindowController = nil
+        }
+        codexAccountsWindowController = controller
+        pushCodexAccountStatuses()
+        controller.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func applyCodexAccounts(_ accounts: [CodexAccount], activeID: String?, refresh: Bool) {
+        codexAccounts = accounts
+        if activeID == nil || !codexAccounts.contains(where: { $0.id == activeID }) {
+            activeCodexAccountID = codexAccounts.first?.id
+        } else {
+            activeCodexAccountID = activeID
+        }
+        saveConfiguration()
+        rebuildSourceStates()
+        renderSummaryView()
+        renderStatusBar()
+        pushCodexAccountStatuses()
+        if refresh {
+            refreshNow()
+        }
+    }
+
     private func apiKeyValue(for source: PackageSource) -> String {
         switch source {
         case .codex:
-            return codexAPIKey
+            return activeCodexAccount?.apiKey ?? ""
         case .agi:
             return agiAPIKey
         }
@@ -3508,26 +3886,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func apiKeyOrigin(for source: PackageSource) -> APIKeyOrigin {
         switch source {
         case .codex:
-            return codexAPIKeyOrigin
+            return activeCodexAccount == nil ? .none : .userDefaults
         case .agi:
             return agiAPIKeyOrigin
         }
     }
 
-    private func setAPIKey(_ value: String, for source: PackageSource) {
-        let normalized = Self.normalizeAPIKey(value)
-        switch source {
-        case .codex:
-            codexAPIKey = normalized
-            codexAPIKeyOrigin = .userDefaults
-        case .agi:
-            agiAPIKey = normalized
-            agiAPIKeyOrigin = .userDefaults
-        }
-    }
-
     private func apiKeyStatusText(for source: PackageSource) -> String {
-        let token = apiKeyValue(for: source)
+        guard source == .agi else { return codexAccountsStatusText() }
+        let token = agiAPIKey
         guard !token.isEmpty else { return "未配置" }
         switch apiKeyOrigin(for: source) {
         case .userDefaults:
@@ -3539,16 +3906,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
+    private func codexAccountsStatusText() -> String {
+        guard !codexAccounts.isEmpty else { return "未配置" }
+        let activeName = activeCodexAccount?.name ?? codexAccounts[0].name
+        return "\(codexAccounts.count) 个账号 · 显示: \(activeName)"
+    }
+
+    private func displaySourceTitle(for source: PackageSource) -> String {
+        if source == .codex, let account = activeCodexAccount, !account.name.isEmpty {
+            return "Codex · \(account.name)"
+        }
+        return source.chipTitle
+    }
+
+    private func sourceGroupTitle(for source: PackageSource) -> String {
+        if source == .codex, let account = activeCodexAccount {
+            return "\(source.title) · \(account.name)"
+        }
+        return source.title
+    }
+
+    private func codexAccountStatusText(_ state: SourceMonitorState?) -> String {
+        guard let state else { return "等待中" }
+        if state.remaining != "--" {
+            return "在线"
+        }
+        if state.fallbackText.contains("未配置") || state.message.contains("请先设置") {
+            return "未配置"
+        }
+        if state.fallbackText.contains("加载中") {
+            return "加载中"
+        }
+        if state.fallbackText.contains("请求失败")
+            || state.fallbackText.contains("授权错误")
+            || state.fallbackText.contains("HTTP")
+            || state.fallbackText.contains("解析失败")
+            || state.fallbackText.contains("业务错误")
+            || state.fallbackText.contains("响应异常") {
+            return "异常"
+        }
+        return "等待中"
+    }
+
+    private func pushCodexAccountStatuses() {
+        guard let viewModel = codexAccountsWindowController?.viewModel else { return }
+        viewModel.statuses = Dictionary(
+            uniqueKeysWithValues: codexAccounts.map { account in
+                (account.id, codexAccountStatusText(codexStates[account.id]))
+            }
+        )
+    }
+
     private func resolveAPIKey(for source: PackageSource, defaults: UserDefaults) -> APIKeyResolution {
         if let stored = defaults.object(forKey: source.apiKeyDefaultsKey) as? String {
-            let normalized = Self.normalizeAPIKey(stored)
+            let normalized = normalizedAPIKey(stored)
             if !normalized.isEmpty {
                 return APIKeyResolution(value: normalized, origin: .userDefaults)
             }
         }
         if let legacyKey = source.legacyDefaultsKey,
            let stored = defaults.object(forKey: legacyKey) as? String {
-            let normalized = Self.normalizeAPIKey(stored)
+            let normalized = normalizedAPIKey(stored)
             if !normalized.isEmpty {
                 return APIKeyResolution(value: normalized, origin: .userDefaults)
             }
@@ -3557,48 +3975,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let environment = ProcessInfo.processInfo.environment
         if let value = source.environmentVariableCandidates.lazy
             .compactMap({ environment[$0]?.trimmingCharacters(in: .whitespacesAndNewlines) })
-            .map(Self.normalizeAPIKey)
+            .map(normalizedAPIKey)
             .first(where: { !$0.isEmpty }) {
             return APIKeyResolution(value: value, origin: .environment)
         }
         return APIKeyResolution(value: "", origin: .none)
     }
 
-    nonisolated private static func normalizeAPIKey(_ rawValue: String) -> String {
-        let components = rawValue
-            .split(whereSeparator: \.isWhitespace)
-            .map(String.init)
-
-        guard !components.isEmpty else { return "" }
-
-        if components[0].lowercased() == "bearer" {
-            return components.dropFirst().first ?? ""
-        }
-
-        return components[0]
-    }
-
     private func rebuildSourceStates() {
-        for source in PackageSource.allCases {
-            let hasAPIKey = !apiKeyValue(for: source).isEmpty
-            let existing = sourceStates[source]
-            if let existing, existing.remaining != "--" {
-                continue
+        for account in codexAccounts {
+            if codexStates[account.id] == nil {
+                codexStates[account.id] = .placeholder(for: .codex, hasAPIKey: !account.apiKey.isEmpty)
             }
-            sourceStates[source] = .placeholder(for: source, hasAPIKey: hasAPIKey)
         }
+        let hasAGIKey = !agiAPIKey.isEmpty
+        if let existing = sourceStates[.agi], existing.remaining != "--" {
+            return
+        }
+        sourceStates[.agi] = .placeholder(for: .agi, hasAPIKey: hasAGIKey)
     }
 
     private func state(for source: PackageSource) -> SourceMonitorState {
-        sourceStates[source] ?? .placeholder(for: source, hasAPIKey: !apiKeyValue(for: source).isEmpty)
+        switch source {
+        case .codex:
+            guard let account = activeCodexAccount else {
+                return .placeholder(for: .codex, hasAPIKey: false)
+            }
+            return codexStates[account.id] ?? .placeholder(for: .codex, hasAPIKey: !account.apiKey.isEmpty)
+        case .agi:
+            return sourceStates[.agi] ?? .placeholder(for: .agi, hasAPIKey: !agiAPIKey.isEmpty)
+        }
     }
 
     private func setState(_ state: SourceMonitorState, for source: PackageSource) {
+        guard source == .agi else { return }
         sourceStates[source] = state
     }
 
     private func updateSourceState(source: PackageSource, payload: NormalizedMonitorPayload, message: String) {
-        var state = state(for: source)
+        guard source == .agi else { return }
+        let base = sourceStates[.agi] ?? .placeholder(for: .agi, hasAPIKey: !agiAPIKey.isEmpty)
+        sourceStates[.agi] = updatedState(base: base, payload: payload, message: message)
+    }
+
+    private func updateSourceFailure(source: PackageSource, fallbackText: String, message: String) {
+        guard source == .agi else { return }
+        let base = sourceStates[.agi] ?? .placeholder(for: .agi, hasAPIKey: !agiAPIKey.isEmpty)
+        sourceStates[.agi] = failedState(base: base, fallbackText: fallbackText, message: message)
+    }
+
+    private func updateCodexState(accountID: String, payload: NormalizedMonitorPayload, message: String) {
+        let base = codexStates[accountID] ?? .placeholder(for: .codex, hasAPIKey: true)
+        codexStates[accountID] = updatedState(base: base, payload: payload, message: message)
+    }
+
+    private func updateCodexFailure(accountID: String, fallbackText: String, message: String) {
+        let base = codexStates[accountID] ?? .placeholder(for: .codex, hasAPIKey: true)
+        codexStates[accountID] = failedState(base: base, fallbackText: fallbackText, message: message)
+    }
+
+    private func updatedState(base: SourceMonitorState, payload: NormalizedMonitorPayload, message: String) -> SourceMonitorState {
+        var state = base
         state.usage = payload.usage
         state.remaining = payload.remaining
         state.renewal = payload.renewal ?? "--"
@@ -3610,23 +4047,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         state.packageItems = payload.packageItems
         state.usedPercent = payload.usedPercent
         state.fallbackText = "余: \(payload.remaining)"
-        setState(state, for: source)
+        return state
     }
 
-    private func updateSourceFailure(source: PackageSource, fallbackText: String, message: String) {
-        var state = state(for: source)
+    private func failedState(base: SourceMonitorState, fallbackText: String, message: String) -> SourceMonitorState {
+        var state = base
         state.usage = "--"
         state.remaining = "--"
         state.renewal = "--"
         state.message = message
-        state.usageLabel = source == .agi ? "已用" : "已用/总"
-        state.progressLabel = source == .agi ? "总用量进度" : "用量进度"
+        state.usageLabel = base.source == .agi ? "已用" : "已用/总"
+        state.progressLabel = base.source == .agi ? "总用量进度" : "用量进度"
         state.progressPrefix = nil
         state.packageItems = []
         state.usedPercent = nil
         state.email = nil
         state.fallbackText = fallbackText
-        setState(state, for: source)
+        return state
     }
 
     private func toggleSourceGroup(_ source: PackageSource) {
@@ -3726,12 +4163,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     @objc private func handleOpenLogs() {
-        guard !codexAPIKey.isEmpty else {
+        guard let apiKey = activeCodexAccount?.apiKey, !apiKey.isEmpty else {
             showError("请先设置 Codex API Key")
             return
         }
 
-        if let controller = logWindowController, logWindowAPIKey == codexAPIKey {
+        if let controller = logWindowController, logWindowAPIKey == apiKey {
             controller.showWindow(nil)
             controller.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -3742,7 +4179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         logWindowController = nil
         logWindowAPIKey = nil
 
-        let hostingView = NSHostingView(rootView: CodexLogWindowView(apiKey: codexAPIKey))
+        let hostingView = NSHostingView(rootView: CodexLogWindowView(apiKey: apiKey))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1080, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -3758,7 +4195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         let controller = NSWindowController(window: window)
         logWindowController = controller
-        logWindowAPIKey = codexAPIKey
+        logWindowAPIKey = apiKey
         controller.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -3925,11 +4362,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         rebuildSourceStates()
         renderSummaryView()
         renderStatusBar()
-        PackageSource.allCases.forEach(refreshSource)
+        codexAccounts.forEach(refreshCodexAccount)
+        refreshSource(.agi)
     }
 
     private func refreshSource(_ source: PackageSource) {
-        let apiKey = apiKeyValue(for: source)
+        guard source == .agi else { return }
+        let apiKey = agiAPIKey
 
         guard !apiKey.isEmpty else {
             updateSourceFailure(
@@ -3942,48 +4381,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             return
         }
 
+        performFetch(source: source, apiKey: apiKey) { [weak self] payload, now in
+            DispatchQueue.main.async {
+                self?.updateSourceState(
+                    source: source,
+                    payload: payload,
+                    message: "更新时间: \(Self.timeFormatter.string(from: now))"
+                )
+                self?.renderSummaryView()
+                self?.renderStatusBar()
+            }
+        } onFailure: { [weak self] fallbackText, message in
+            DispatchQueue.main.async {
+                self?.updateSourceFailure(
+                    source: source,
+                    fallbackText: fallbackText,
+                    message: message
+                )
+                self?.renderSummaryView()
+                self?.renderStatusBar()
+            }
+        }
+    }
+
+    private func refreshCodexAccount(_ account: CodexAccount) {
+        guard !account.apiKey.isEmpty else {
+            updateCodexFailure(
+                accountID: account.id,
+                fallbackText: "\(PackageSource.codex.chipTitle): 未配置Key",
+                message: "请先设置 Codex API Key"
+            )
+            renderSummaryView()
+            renderStatusBar()
+            return
+        }
+
+        performFetch(source: .codex, apiKey: account.apiKey) { [weak self] payload, now in
+            DispatchQueue.main.async {
+                self?.updateCodexState(
+                    accountID: account.id,
+                    payload: payload,
+                    message: "更新时间: \(Self.timeFormatter.string(from: now))"
+                )
+                self?.renderSummaryView()
+                self?.renderStatusBar()
+            }
+        } onFailure: { [weak self] fallbackText, message in
+            DispatchQueue.main.async {
+                self?.updateCodexFailure(
+                    accountID: account.id,
+                    fallbackText: fallbackText,
+                    message: message
+                )
+                self?.renderSummaryView()
+                self?.renderStatusBar()
+            }
+        }
+    }
+
+    nonisolated private func performFetch(
+        source: PackageSource,
+        apiKey: String,
+        onSuccess: @escaping @Sendable (NormalizedMonitorPayload, Date) -> Void,
+        onFailure: @escaping @Sendable (String, String) -> Void
+    ) {
         var request = URLRequest(url: source.endpoint)
         request.httpMethod = "GET"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let self else { return }
-
+        URLSession.shared.dataTask(with: request) { data, response, error in
             if let error {
                 DispatchQueue.main.async {
-                    self.updateSourceFailure(
-                        source: source,
-                        fallbackText: "\(source.chipTitle): 请求失败",
-                        message: "网络错误: \(error.localizedDescription)"
-                    )
-                    self.renderSummaryView()
-                    self.renderStatusBar()
+                    onFailure("\(source.chipTitle): 请求失败", "网络错误: \(error.localizedDescription)")
                 }
                 return
             }
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 DispatchQueue.main.async {
-                    self.updateSourceFailure(
-                        source: source,
-                        fallbackText: "\(source.chipTitle): 响应异常",
-                        message: "无效响应"
-                    )
-                    self.renderSummaryView()
-                    self.renderStatusBar()
+                    onFailure("\(source.chipTitle): 响应异常", "无效响应")
                 }
                 return
             }
 
             guard (200...299).contains(httpResponse.statusCode), let data else {
                 DispatchQueue.main.async {
-                    self.updateSourceFailure(
-                        source: source,
-                        fallbackText: "\(source.chipTitle): HTTP \(httpResponse.statusCode)",
-                        message: "接口返回 HTTP \(httpResponse.statusCode)"
-                    )
-                    self.renderSummaryView()
-                    self.renderStatusBar()
+                    onFailure("\(source.chipTitle): HTTP \(httpResponse.statusCode)", "接口返回 HTTP \(httpResponse.statusCode)")
                 }
                 return
             }
@@ -3991,28 +4474,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             do {
                 let payload = try Self.parsePayload(from: data, source: source)
                 let now = Date()
-
                 DispatchQueue.main.async {
-                    self.updateSourceState(
-                        source: source,
-                        payload: payload,
-                        message: "更新时间: \(Self.timeFormatter.string(from: now))"
-                    )
-                    self.renderSummaryView()
-                    self.renderStatusBar()
+                    onSuccess(payload, now)
                 }
             } catch {
                 let rawSnippet = String(data: data, encoding: .utf8)?
                     .replacingOccurrences(of: "\n", with: " ")
                     .prefix(120) ?? "无法读取响应内容"
                 DispatchQueue.main.async {
-                    self.updateSourceFailure(
-                        source: source,
-                        fallbackText: "\(source.chipTitle): 解析失败",
-                        message: "解析错误: \(error.localizedDescription) | \(rawSnippet)"
-                    )
-                    self.renderSummaryView()
-                    self.renderStatusBar()
+                    onFailure("\(source.chipTitle): 解析失败", "解析错误: \(error.localizedDescription) | \(rawSnippet)")
                 }
             }
         }.resume()
@@ -4183,6 +4653,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
             return SourceSummaryGroupViewModel(
                 source: source,
+                displayTitle: sourceGroupTitle(for: source),
                 statusText: status.0,
                 statusTone: status.1,
                 usageLabel: sourceState.usageLabel,
@@ -4204,7 +4675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         summaryView.apply(
             StatusSummaryViewModel(
                 title: AppMeta.displayName,
-                currentSourceTitle: activeSource.chipTitle,
+                currentSourceTitle: displaySourceTitle(for: activeSource),
                 statisticsDisplayMode: statisticsDisplayMode,
                 statisticsModeText: statisticsDisplayMode.fullTitle,
                 statusText: overallStatus.0,
@@ -4224,7 +4695,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 progressValue: progressValue,
                 progress: activeState.usedPercent.map { max(0, min(100, $0)) / 100 },
                 footerText: activeState.message,
-                codexAPIKeyStatusText: apiKeyStatusText(for: .codex),
+                codexAccountsStatusText: codexAccountsStatusText(),
                 agiAPIKeyStatusText: apiKeyStatusText(for: .agi),
                 pollIntervalText: "\(Int(pollInterval)) 秒",
                 displayStyle: displayStyle,
@@ -4238,6 +4709,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
         summaryView.frame = NSRect(origin: .zero, size: summaryView.intrinsicContentSize)
         mcpSnapshotStore.set(makeMCPSnapshotData())
+        pushCodexAccountStatuses()
     }
 
     private func performMenuAction(_ action: @escaping () -> Void) {
