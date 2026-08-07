@@ -290,6 +290,41 @@ private struct CodexAccount: Identifiable, Codable, Equatable {
     var apiKey: String
 }
 
+private enum CodexAuthFile {
+    static let authKey = "OPENAI_API_KEY"
+
+    static let path = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".codex/auth.json")
+
+    static func loadCurrentKey() -> String? {
+        guard let data = try? Data(contentsOf: path),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return json[authKey] as? String
+    }
+
+    static func applyKey(_ key: String) throws {
+        let manager = FileManager.default
+        try manager.createDirectory(
+            at: path.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        var json: [String: Any]
+        if let data = try? Data(contentsOf: path),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            json = object
+        } else {
+            json = [:]
+        }
+        json[authKey] = key
+
+        let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: path, options: .atomic)
+    }
+}
+
 private func normalizedAPIKey(_ rawValue: String) -> String {
     let components = rawValue
         .split(whereSeparator: \.isWhitespace)
@@ -1121,18 +1156,24 @@ private struct CodexLogDetailSection: View {
 private final class CodexAccountsWindowViewModel: ObservableObject, @unchecked Sendable {
     @Published var accounts: [CodexAccount]
     @Published var activeID: String?
+    @Published var localID: String?
     @Published var statuses: [String: String] = [:]
 
     private let onChange: ([CodexAccount], String?, Bool) -> Void
+    private let onApplyLocal: (String) -> Void
 
     init(
         accounts: [CodexAccount],
         activeID: String?,
-        onChange: @escaping ([CodexAccount], String?, Bool) -> Void
+        localID: String?,
+        onChange: @escaping ([CodexAccount], String?, Bool) -> Void,
+        onApplyLocal: @escaping (String) -> Void
     ) {
         self.accounts = accounts
         self.activeID = activeID
+        self.localID = localID
         self.onChange = onChange
+        self.onApplyLocal = onApplyLocal
     }
 
     func addAccount(name: String, key: String) {
@@ -1172,6 +1213,11 @@ private final class CodexAccountsWindowViewModel: ObservableObject, @unchecked S
               accounts[index].name != name else { return }
         accounts[index].name = name
         commit(refresh: false)
+    }
+
+    func applyLocal(id: String) {
+        guard accounts.contains(where: { $0.id == id }) else { return }
+        onApplyLocal(id)
     }
 
     func commit(refresh: Bool = true) {
@@ -1245,6 +1291,7 @@ private struct CodexAccountsWindowView: View {
 
     private func accountRow(_ account: CodexAccount) -> some View {
         let isActive = account.id == viewModel.activeID
+        let isLocal = account.id == viewModel.localID
         let statusText = viewModel.statuses[account.id] ?? "等待中"
 
         return HStack(spacing: 10) {
@@ -1293,6 +1340,23 @@ private struct CodexAccountsWindowView: View {
                 .padding(.vertical, 4)
                 .background(statusColor(statusText).opacity(0.12))
                 .clipShape(Capsule())
+
+            Button(action: { viewModel.applyLocal(id: account.id) }) {
+                Image(systemName: isLocal ? "checkmark.circle.fill" : "switch.2")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isLocal ? Color.green : Color.secondary)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        Circle()
+                            .fill(isLocal ? Color.green.opacity(0.12) : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(
+                isLocal
+                    ? "本地 Codex 正在使用此账号（~/.codex/auth.json）"
+                    : "点击写入 ~/.codex/auth.json，切换本地 Codex 使用此 Key"
+            )
 
             Button(role: .destructive, action: { viewModel.removeAccount(id: account.id) }) {
                 Image(systemName: "trash")
@@ -1467,6 +1531,7 @@ private struct CodexAccountSummaryViewModel: Identifiable {
     let statusText: String
     let statusTone: SummaryStatusTone
     let isActive: Bool
+    let isLocal: Bool
 }
 
 private struct SummaryPackageItem {
@@ -2103,6 +2168,7 @@ private struct CodexAccountListSection: View {
     let title: String?
     let accounts: [CodexAccountSummaryViewModel]
     let onSelect: ((String) -> Void)?
+    let onApplyLocal: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -2122,66 +2188,90 @@ private struct CodexAccountListSection: View {
     }
 
     private func accountRow(_ account: CodexAccountSummaryViewModel) -> some View {
-        Button(action: { onSelect?(account.id) }) {
-            HStack(alignment: .center, spacing: 7) {
-                Image(systemName: account.isActive ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(account.isActive ? Color.accentColor : Color.secondary)
-                    .frame(width: 14)
+        HStack(alignment: .center, spacing: 7) {
+            Button(action: { onSelect?(account.id) }) {
+                HStack(alignment: .center, spacing: 7) {
+                    Image(systemName: account.isActive ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(account.isActive ? Color.accentColor : Color.secondary)
+                        .frame(width: 14)
 
-                Text(account.name)
-                    .font(.system(size: 11.5, weight: .bold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                    .frame(width: 74, alignment: .leading)
-
-                VStack(alignment: .leading, spacing: 1.5) {
-                    Text("余: \(account.remaining)")
-                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
+                    Text(account.name)
+                        .font(.system(size: 11.5, weight: .bold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                        .minimumScaleFactor(0.82)
+                        .frame(width: 72, alignment: .leading)
 
-                    Text("用: \(account.usage)")
-                        .font(.system(size: 9.5, weight: .medium, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
+                    VStack(alignment: .leading, spacing: 1.5) {
+                        Text("余: \(account.remaining)")
+                            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+
+                        Text("用: \(account.usage)")
+                            .font(.system(size: 9.5, weight: .medium, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.78)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Text(account.statusText)
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(account.statusTone.swiftUIColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(account.statusTone.swiftUIFillColor)
+                        .overlay {
+                            Capsule().stroke(account.statusTone.swiftUIBorderColor, lineWidth: 0.8)
+                        }
+                        .clipShape(Capsule())
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text(account.statusText)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(account.statusTone.swiftUIColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(account.statusTone.swiftUIFillColor)
-                    .overlay {
-                        Capsule().stroke(account.statusTone.swiftUIBorderColor, lineWidth: 0.8)
-                    }
-                    .clipShape(Capsule())
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentMaterialSurface(
-                cornerRadius: 12,
-                tint: account.isActive
-                    ? Color.accentColor.opacity(0.10)
-                    : .primary.opacity(0.03)
-            )
-            .overlay {
-                if account.isActive {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.accentColor.opacity(0.35), lineWidth: 0.8)
-                }
+            .buttonStyle(.plain)
+            .help(account.isActive ? "该账号当前显示在状态栏" : "点击切换为状态栏显示的账号")
+
+            applyLocalButton(account)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentMaterialSurface(
+            cornerRadius: 12,
+            tint: account.isActive
+                ? Color.accentColor.opacity(0.10)
+                : .primary.opacity(0.03)
+        )
+        .overlay {
+            if account.isActive {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.accentColor.opacity(0.35), lineWidth: 0.8)
             }
         }
+    }
+
+    private func applyLocalButton(_ account: CodexAccountSummaryViewModel) -> some View {
+        Button(action: { onApplyLocal?(account.id) }) {
+            Image(systemName: account.isLocal ? "checkmark.circle.fill" : "switch.2")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(account.isLocal ? Color.green : Color.secondary)
+                .frame(width: 22, height: 22)
+                .background(
+                    Circle()
+                        .fill(account.isLocal ? Color.green.opacity(0.12) : Color.clear)
+                )
+        }
         .buttonStyle(.plain)
-        .help(account.isActive ? "该账号当前显示在状态栏" : "点击切换为状态栏显示的账号")
+        .help(
+            account.isLocal
+                ? "本地 Codex 正在使用此账号（~/.codex/auth.json）"
+                : "点击写入 ~/.codex/auth.json，切换本地 Codex 使用此 Key"
+        )
     }
 }
 
@@ -2192,6 +2282,7 @@ private struct SourceSummaryGroupView: View {
     let onSelectCodexModel: ((String) -> Void)?
     let onSelectCodexReasoningEffort: ((String) -> Void)?
     let onSelectCodexAccount: ((String) -> Void)?
+    let onApplyLocalCodexAccount: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2338,7 +2429,8 @@ private struct SourceSummaryGroupView: View {
                         CodexAccountListSection(
                             title: "全部 Codex 账号（\(model.codexAccounts.count)）",
                             accounts: model.codexAccounts,
-                            onSelect: onSelectCodexAccount
+                            onSelect: onSelectCodexAccount,
+                            onApplyLocal: onApplyLocalCodexAccount
                         )
                     }
 
@@ -2478,6 +2570,7 @@ private struct LiquidGlassSummaryPanel: View {
     let onSelectDisplayStyle: ((StatusDisplayStyle) -> Void)?
     let onToggleSourceGroup: ((PackageSource) -> Void)?
     let onSelectCodexAccount: ((String) -> Void)?
+    let onApplyLocalCodexAccount: ((String) -> Void)?
     let onToggleCodexModelConfig: (() -> Void)?
     let onSelectCodexModel: ((String) -> Void)?
     let onSelectCodexReasoningEffort: ((String) -> Void)?
@@ -2549,7 +2642,8 @@ private struct LiquidGlassSummaryPanel: View {
                 CodexAccountListSection(
                     title: "全部 Codex 账号（\(model.codexAccounts.count)）",
                     accounts: model.codexAccounts,
-                    onSelect: onSelectCodexAccount
+                    onSelect: onSelectCodexAccount,
+                    onApplyLocal: onApplyLocalCodexAccount
                 )
             }
             packageSection
@@ -2568,7 +2662,8 @@ private struct LiquidGlassSummaryPanel: View {
                     onToggleCodexModelConfig: onToggleCodexModelConfig,
                     onSelectCodexModel: onSelectCodexModel,
                     onSelectCodexReasoningEffort: onSelectCodexReasoningEffort,
-                    onSelectCodexAccount: onSelectCodexAccount
+                    onSelectCodexAccount: onSelectCodexAccount,
+                    onApplyLocalCodexAccount: onApplyLocalCodexAccount
                 )
             }
         }
@@ -3170,6 +3265,9 @@ private final class StatusSummaryView: NSView {
     var onSelectCodexAccount: ((String) -> Void)? {
         didSet { updateRootView() }
     }
+    var onApplyLocalCodexAccount: ((String) -> Void)? {
+        didSet { updateRootView() }
+    }
     var onToggleCodexModelConfig: (() -> Void)? {
         didSet { updateRootView() }
     }
@@ -3212,6 +3310,7 @@ private final class StatusSummaryView: NSView {
                 onSelectDisplayStyle: nil,
                 onToggleSourceGroup: nil,
                 onSelectCodexAccount: nil,
+                onApplyLocalCodexAccount: nil,
                 onToggleCodexModelConfig: nil,
                 onSelectCodexModel: nil,
                 onSelectCodexReasoningEffort: nil,
@@ -3263,6 +3362,7 @@ private final class StatusSummaryView: NSView {
             onSelectDisplayStyle: onSelectDisplayStyle,
             onToggleSourceGroup: onToggleSourceGroup,
             onSelectCodexAccount: onSelectCodexAccount,
+            onApplyLocalCodexAccount: onApplyLocalCodexAccount,
             onToggleCodexModelConfig: onToggleCodexModelConfig,
             onSelectCodexModel: onSelectCodexModel,
             onSelectCodexReasoningEffort: onSelectCodexReasoningEffort,
@@ -3309,6 +3409,7 @@ private struct MCPCodexAccount: Encodable {
     let usage: String
     let status: String
     let isActive: Bool
+    let isLocal: Bool
 }
 
 private final class MCPSnapshotStore: @unchecked Sendable {
@@ -3654,6 +3755,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var statisticsDisplayMode: StatisticsDisplayMode = .single
     private var codexAccounts: [CodexAccount] = []
     private var activeCodexAccountID: String?
+    private var localCodexKey: String?
     private var codexStates: [String: SourceMonitorState] = [:]
     private var agiAPIKey: String = ""
     private var agiAPIKeyOrigin: APIKeyOrigin = .none
@@ -3749,6 +3851,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             || !codexAccounts.contains(where: { $0.id == activeCodexAccountID }) {
             activeCodexAccountID = codexAccounts.first?.id
         }
+        localCodexKey = CodexAuthFile.loadCurrentKey()
     }
 
     private func saveConfiguration() {
@@ -3828,6 +3931,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
         summaryView.onSelectCodexAccount = { [weak self] accountID in
             self?.selectCodexAccount(id: accountID)
+        }
+        summaryView.onApplyLocalCodexAccount = { [weak self] accountID in
+            self?.applyCodexAccountToLocal(id: accountID)
         }
         summaryView.onToggleCodexModelConfig = { [weak self] in
             self?.toggleCodexModelConfig()
@@ -3978,9 +4084,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         let viewModel = CodexAccountsWindowViewModel(
             accounts: codexAccounts,
-            activeID: activeCodexAccountID
+            activeID: activeCodexAccountID,
+            localID: codexAccounts.first { $0.apiKey == localCodexKey }?.id
         ) { [weak self] accounts, activeID, refresh in
             self?.applyCodexAccounts(accounts, activeID: activeID, refresh: refresh)
+        } onApplyLocal: { [weak self] accountID in
+            self?.applyCodexAccountToLocal(id: accountID)
         }
         let controller = CodexAccountsWindowController(viewModel: viewModel)
         controller.onClose = { [weak self] in
@@ -4107,7 +4216,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 usage: state?.usage ?? "--",
                 statusText: codexAccountStatusText(state),
                 statusTone: codexAccountStatusTone(state),
-                isActive: account.id == activeID
+                isActive: account.id == activeID,
+                isLocal: localCodexKey != nil && account.apiKey == localCodexKey
             )
         }
     }
@@ -4246,6 +4356,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         pushCodexAccountStatuses()
         if let account = activeCodexAccount {
             refreshCodexAccount(account)
+        }
+    }
+
+    private func applyCodexAccountToLocal(id: String) {
+        guard let account = codexAccounts.first(where: { $0.id == id }),
+              !account.apiKey.isEmpty else { return }
+        do {
+            try CodexAuthFile.applyKey(account.apiKey)
+            localCodexKey = account.apiKey
+            codexAccountsWindowController?.viewModel.localID = id
+            renderSummaryView()
+        } catch {
+            showError("写入 ~/.codex/auth.json 失败: \(error.localizedDescription)")
         }
     }
 
@@ -4540,7 +4663,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     remaining: state?.remaining ?? "--",
                     usage: state?.usage ?? "--",
                     status: codexAccountStatusText(state),
-                    isActive: account.id == activeCodexAccount?.id
+                    isActive: account.id == activeCodexAccount?.id,
+                    isLocal: localCodexKey != nil && account.apiKey == localCodexKey
                 )
             }
         )
