@@ -20,7 +20,7 @@ private enum DefaultsKey {
 }
 
 private enum AppMeta {
-    static let displayName = "伊莉思账户监控助手"
+    static let displayName = "伊莉思账户助手"
     static let mcpHost = "127.0.0.1"
     static let defaultMCPPort: UInt16 = 8765
     static let stackedStatusMinWidth: CGFloat = 44
@@ -1176,14 +1176,13 @@ private final class CodexAccountsWindowViewModel: ObservableObject, @unchecked S
         self.onApplyLocal = onApplyLocal
     }
 
-    func addAccount(name: String, key: String) {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    func addAccount(key: String) {
         let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else { return }
 
         let account = CodexAccount(
             id: UUID().uuidString,
-            name: trimmedName.isEmpty ? "账号 \(accounts.count + 1)" : trimmedName,
+            name: nextAccountName(),
             apiKey: normalizedAPIKey(trimmedKey)
         )
         accounts.append(account)
@@ -1191,6 +1190,15 @@ private final class CodexAccountsWindowViewModel: ObservableObject, @unchecked S
             activeID = account.id
         }
         commit()
+    }
+
+    private func nextAccountName() -> String {
+        let used = Set(accounts.map(\.name))
+        var index = accounts.count + 1
+        while used.contains("账号 \(index)") {
+            index += 1
+        }
+        return "账号 \(index)"
     }
 
     func removeAccount(id: String) {
@@ -1208,13 +1216,6 @@ private final class CodexAccountsWindowViewModel: ObservableObject, @unchecked S
         commit()
     }
 
-    func renameAccount(id: String, name: String) {
-        guard let index = accounts.firstIndex(where: { $0.id == id }),
-              accounts[index].name != name else { return }
-        accounts[index].name = name
-        commit(refresh: false)
-    }
-
     func applyLocal(id: String) {
         guard accounts.contains(where: { $0.id == id }) else { return }
         onApplyLocal(id)
@@ -1227,8 +1228,8 @@ private final class CodexAccountsWindowViewModel: ObservableObject, @unchecked S
 
 private struct CodexAccountsWindowView: View {
     @ObservedObject var viewModel: CodexAccountsWindowViewModel
-    @State private var newAccountName = ""
     @State private var newAccountKey = ""
+    @State private var copiedAccountID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1321,25 +1322,35 @@ private struct CodexAccountsWindowView: View {
             .buttonStyle(.plain)
             .help("在状态栏显示该账号")
 
-            TextField("账号名称", text: nameBinding(for: account))
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 150)
-
             Text(maskedKey(account.apiKey))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
 
+            Button(action: { copyAPIKey(account) }) {
+                Image(systemName: copiedAccountID == account.id ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(copiedAccountID == account.id ? Color.green : Color.secondary)
+                    .frame(width: 22, height: 22)
+                    .background(
+                        Circle()
+                            .fill(copiedAccountID == account.id ? Color.green.opacity(0.12) : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("复制 API Key")
+            .disabled(account.apiKey.isEmpty)
+
             Spacer(minLength: 6)
 
-            Text(statusText)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(statusColor(statusText))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(statusColor(statusText).opacity(0.12))
-                .clipShape(Capsule())
+            StatusIndicatorView(
+                text: statusText,
+                color: statusColor(statusText),
+                fontSize: 10.5,
+                horizontalPadding: 8,
+                verticalPadding: 4
+            )
 
             Button(action: { viewModel.applyLocal(id: account.id) }) {
                 Image(systemName: isLocal ? "checkmark.circle.fill" : "switch.2")
@@ -1380,10 +1391,6 @@ private struct CodexAccountsWindowView: View {
                 .foregroundStyle(.primary)
 
             HStack(spacing: 8) {
-                TextField("名称（可选）", text: $newAccountName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 150)
-
                 TextField("Codex API Key（Bearer Token）", text: $newAccountKey)
                     .textFieldStyle(.roundedBorder)
 
@@ -1396,16 +1403,21 @@ private struct CodexAccountsWindowView: View {
     }
 
     private func addAccount() {
-        viewModel.addAccount(name: newAccountName, key: newAccountKey)
-        newAccountName = ""
+        viewModel.addAccount(key: newAccountKey)
         newAccountKey = ""
     }
 
-    private func nameBinding(for account: CodexAccount) -> Binding<String> {
-        Binding(
-            get: { account.name },
-            set: { viewModel.renameAccount(id: account.id, name: $0) }
-        )
+    private func copyAPIKey(_ account: CodexAccount) {
+        guard !account.apiKey.isEmpty else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(account.apiKey, forType: .string)
+        copiedAccountID = account.id
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            guard copiedAccountID == account.id else { return }
+            copiedAccountID = nil
+        }
     }
 
     private func maskedKey(_ key: String) -> String {
@@ -1437,7 +1449,7 @@ private final class CodexAccountsWindowController: NSWindowController, NSWindowD
         self.viewModel = viewModel
         let hostingView = NSHostingView(rootView: CodexAccountsWindowView(viewModel: viewModel))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 460),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -1509,6 +1521,8 @@ private struct StatusSummaryViewModel {
     let progressPrefix: String?
     let progressValue: String
     let progress: Double?
+    let dailyProgress: UsageProgressMetric?
+    let weeklyProgress: UsageProgressMetric?
     let footerText: String
     let codexAccountsStatusText: String
     let agiAPIKeyStatusText: String
@@ -1523,11 +1537,24 @@ private struct StatusSummaryViewModel {
     let codexAccounts: [CodexAccountSummaryViewModel]
 }
 
+private struct UsageProgressMetric {
+    let label: String
+    let quotaText: String?
+    let usedPercent: Double?
+    let totalQuota: Double?
+    let usedQuota: Double?
+}
+
 private struct CodexAccountSummaryViewModel: Identifiable {
     let id: String
     let name: String
     let remaining: String
-    let usage: String
+    let dailyQuota: String
+    let weeklyQuota: String
+    let dailyUsedPercent: Double?
+    let weeklyUsedPercent: Double?
+    let dailyUsedQuota: Double?
+    let dailyTotalQuota: Double?
     let statusText: String
     let statusTone: SummaryStatusTone
     let isActive: Bool
@@ -1556,6 +1583,8 @@ private struct SourceSummaryGroupViewModel {
     let progressPrefix: String?
     let progressValue: String
     let progress: Double?
+    let dailyProgress: UsageProgressMetric?
+    let weeklyProgress: UsageProgressMetric?
     let footerText: String
     let isExpanded: Bool
     let codexModelConfig: CodexModelConfigViewModel?
@@ -1810,6 +1839,9 @@ private struct NormalizedMonitorPayload {
     let renewal: String?
     let packageItems: [SummaryPackageItem]
     let usedPercent: Double?
+    let dailyUsedPercent: Double?
+    let dailyProgress: UsageProgressMetric?
+    let weeklyProgress: UsageProgressMetric?
     let usageLabel: String
     let progressLabel: String
     let progressPrefix: String?
@@ -1828,6 +1860,9 @@ private struct SourceMonitorState {
     var email: String?
     var packageItems: [SummaryPackageItem]
     var usedPercent: Double?
+    var dailyUsedPercent: Double?
+    var dailyProgress: UsageProgressMetric?
+    var weeklyProgress: UsageProgressMetric?
     var fallbackText: String
 
     static func placeholder(for source: PackageSource, hasAPIKey: Bool) -> SourceMonitorState {
@@ -1843,6 +1878,9 @@ private struct SourceMonitorState {
             email: nil,
             packageItems: [],
             usedPercent: nil,
+            dailyUsedPercent: nil,
+            dailyProgress: nil,
+            weeklyProgress: nil,
             fallbackText: hasAPIKey ? "\(source.chipTitle): 加载中..." : "\(source.chipTitle): 未配置Key"
         )
     }
@@ -1852,6 +1890,39 @@ private extension SummaryStatusTone {
     var swiftUIColor: Color { Color(nsColor: textColor) }
     var swiftUIFillColor: Color { Color(nsColor: fillColor) }
     var swiftUIBorderColor: Color { Color(nsColor: borderColor) }
+}
+
+private struct StatusIndicatorView: View {
+    let text: String
+    let color: Color
+    var fontSize: CGFloat = 10.5
+    var horizontalPadding: CGFloat = 8
+    var verticalPadding: CGFloat = 4
+    var fillColor: Color?
+    var borderColor: Color?
+
+    var body: some View {
+        if text == "在线" {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+                .help("在线")
+                .accessibilityLabel("在线")
+        } else {
+            Text(text)
+                .font(.system(size: fontSize, weight: .semibold))
+                .foregroundStyle(color)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, verticalPadding)
+                .background(fillColor ?? color.opacity(0.12))
+                .overlay {
+                    if let borderColor {
+                        Capsule().stroke(borderColor, lineWidth: 0.8)
+                    }
+                }
+                .clipShape(Capsule())
+        }
+    }
 }
 
 private extension StatusSummaryViewModel {
@@ -1876,6 +1947,8 @@ private extension StatusSummaryViewModel {
         progressPrefix: nil,
         progressValue: "--",
         progress: nil,
+        dailyProgress: nil,
+        weeklyProgress: nil,
         footerText: "等待数据",
         codexAccountsStatusText: "未配置",
         agiAPIKeyStatusText: "未配置",
@@ -2172,10 +2245,23 @@ private struct CodexAccountListSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let title {
-                Text(title)
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                if let title {
+                    Text(title)
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                if let dailyTotalText {
+                    Text("日合计 \(dailyTotalText)")
+                        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help("所有账号当日已用 / 当日总配额")
+                }
             }
 
             VStack(alignment: .leading, spacing: 5) {
@@ -2187,6 +2273,17 @@ private struct CodexAccountListSection: View {
         }
     }
 
+    private var dailyTotalText: String? {
+        let pairs = accounts.compactMap { account -> (used: Double, total: Double)? in
+            guard let used = account.dailyUsedQuota, let total = account.dailyTotalQuota else { return nil }
+            return (used, total)
+        }
+        guard !pairs.isEmpty else { return nil }
+        let totalUsed = pairs.reduce(0) { $0 + $1.used }
+        let totalTotal = pairs.reduce(0) { $0 + $1.total }
+        return "\(AppDelegate.formatQuotaValue(totalUsed))/\(AppDelegate.formatQuotaValue(totalTotal))"
+    }
+
     private func accountRow(_ account: CodexAccountSummaryViewModel) -> some View {
         HStack(alignment: .center, spacing: 7) {
             Button(action: { onSelect?(account.id) }) {
@@ -2196,50 +2293,51 @@ private struct CodexAccountListSection: View {
                         .foregroundStyle(account.isActive ? Color.accentColor : Color.secondary)
                         .frame(width: 14)
 
-                    Text(account.name)
-                        .font(.system(size: 11.5, weight: .bold))
+                    Text("余 \(account.remaining)")
+                        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                        .frame(width: 72, alignment: .leading)
+                        .minimumScaleFactor(0.72)
+                        .frame(width: 62, alignment: .leading)
 
-                    VStack(alignment: .leading, spacing: 1.5) {
-                        Text("余: \(account.remaining)")
-                            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-
-                        Text("用: \(account.usage)")
-                            .font(.system(size: 9.5, weight: .medium, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.78)
+                    VStack(alignment: .leading, spacing: 2) {
+                        accountProgressRow(
+                            label: "日",
+                            percent: account.dailyUsedPercent,
+                            quota: account.dailyQuota
+                        )
+                        accountProgressRow(
+                            label: "周",
+                            percent: account.weeklyUsedPercent,
+                            quota: account.weeklyQuota
+                        )
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Text(account.statusText)
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundStyle(account.statusTone.swiftUIColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(account.statusTone.swiftUIFillColor)
-                        .overlay {
-                            Capsule().stroke(account.statusTone.swiftUIBorderColor, lineWidth: 0.8)
-                        }
-                        .clipShape(Capsule())
+                    StatusIndicatorView(
+                        text: account.statusText,
+                        color: account.statusTone.swiftUIColor,
+                        fontSize: 9.5,
+                        horizontalPadding: 6,
+                        verticalPadding: 3,
+                        fillColor: account.statusTone.swiftUIFillColor,
+                        borderColor: account.statusTone.swiftUIBorderColor
+                    )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
-            .help(account.isActive ? "该账号当前显示在状态栏" : "点击切换为状态栏显示的账号")
+            .help(
+                account.isActive
+                    ? "\(account.name) · 当前显示在状态栏"
+                    : "\(account.name) · 点击切换为状态栏显示的账号"
+            )
 
             applyLocalButton(account)
         }
         .padding(.horizontal, 9)
-        .padding(.vertical, 6)
+        .padding(.vertical, 5)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentMaterialSurface(
             cornerRadius: 12,
@@ -2253,6 +2351,27 @@ private struct CodexAccountListSection: View {
                     .stroke(Color.accentColor.opacity(0.35), lineWidth: 0.8)
             }
         }
+    }
+
+    private func accountProgressRow(label: String, percent: Double?, quota: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 8.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 14, alignment: .leading)
+
+            UsageProgressBar(percent: percent, height: 4)
+                .frame(maxWidth: .infinity)
+
+            Text(quota)
+                .font(.system(size: 8.5, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(width: 76, alignment: .trailing)
+        }
+        .frame(minHeight: 11)
     }
 
     private func applyLocalButton(_ account: CodexAccountSummaryViewModel) -> some View {
@@ -2273,6 +2392,81 @@ private struct CodexAccountListSection: View {
                 : "点击写入 ~/.codex/auth.json，切换本地 Codex 使用此 Key"
         )
     }
+}
+
+private func usageProgressColor(_ percent: Double?) -> Color {
+    guard let percent else { return .secondary.opacity(0.45) }
+    if percent >= 80 { return .red }
+    if percent >= 50 { return .yellow }
+    return .green
+}
+
+private struct UsageProgressBar: View {
+    let percent: Double?
+    let height: CGFloat
+
+    var body: some View {
+        GeometryReader { proxy in
+            let fraction = max(0, min(1, (percent ?? 0) / 100))
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(.quaternary)
+                Capsule()
+                    .fill(usageProgressColor(percent))
+                    .frame(width: proxy.size.width * fraction)
+            }
+        }
+        .frame(height: height)
+    }
+}
+
+private struct UsageProgressRow: View {
+    let metric: UsageProgressMetric
+
+    private let titleWidth: CGFloat = 42
+    private let quotaWidth: CGFloat = 76
+    private let percentWidth: CGFloat = 42
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(metric.label)
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+                .frame(width: titleWidth, alignment: .leading)
+
+            UsageProgressBar(percent: metric.usedPercent, height: 5)
+                .frame(maxWidth: .infinity)
+
+            Text(metric.quotaText ?? "--")
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(width: quotaWidth, alignment: .trailing)
+
+            Text(usagePercentText(metric.usedPercent))
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(width: percentWidth, alignment: .trailing)
+        }
+        .frame(minHeight: 16)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(metric.label)
+        .accessibilityValue(
+            "\(metric.quotaText ?? "--"), \(usagePercentText(metric.usedPercent))"
+        )
+    }
+}
+
+private func usagePercentText(_ percent: Double?) -> String {
+    guard let percent else { return "--" }
+    return String(format: "%.2f%%", max(0, min(100, percent)))
 }
 
 private struct SourceSummaryGroupView: View {
@@ -2305,16 +2499,15 @@ private struct SourceSummaryGroupView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
 
-                    Text(model.statusText)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(model.statusTone.swiftUIColor)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(model.statusTone.swiftUIFillColor)
-                        .overlay {
-                            Capsule().stroke(model.statusTone.swiftUIBorderColor, lineWidth: 0.8)
-                        }
-                        .clipShape(Capsule())
+                    StatusIndicatorView(
+                        text: model.statusText,
+                        color: model.statusTone.swiftUIColor,
+                        fontSize: 10,
+                        horizontalPadding: 8,
+                        verticalPadding: 4,
+                        fillColor: model.statusTone.swiftUIFillColor,
+                        borderColor: model.statusTone.swiftUIBorderColor
+                    )
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -2377,51 +2570,19 @@ private struct SourceSummaryGroupView: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Text(model.progressLabel)
-                                .font(.system(size: 10.5, weight: .semibold))
-                                .foregroundStyle(.secondary)
-
-                            Spacer(minLength: 8)
-
-                            if let progressPrefix = model.progressPrefix {
-                                Text(progressPrefix)
-                                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                                    .monospacedDigit()
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Text(model.progressValue)
-                                .font(.system(size: 12.5, weight: .bold, design: .rounded))
-                                .monospacedDigit()
-                                .foregroundStyle(.primary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let dailyProgress = model.dailyProgress {
+                            UsageProgressRow(metric: dailyProgress)
                         }
-
-                        GeometryReader { proxy in
-                            let value = model.progress ?? 0
-                            ZStack(alignment: .leading) {
-                                Capsule()
-                                    .fill(.quaternary)
-
-                                Capsule()
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [
-                                                .accentColor.opacity(0.72),
-                                                .accentColor.opacity(0.34)
-                                            ],
-                                            startPoint: .leading,
-                                            endPoint: .trailing
-                                        )
-                                    )
-                                    .frame(width: max(10, proxy.size.width * value))
-                            }
+                        if let weeklyProgress = model.weeklyProgress {
+                            UsageProgressRow(metric: weeklyProgress)
                         }
-                        .frame(height: 8)
+                        if model.dailyProgress == nil, model.weeklyProgress == nil {
+                            UsageProgressRow(metric: fallbackProgressMetric)
+                        }
                     }
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 7)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentMaterialSurface(cornerRadius: 13)
 
@@ -2444,6 +2605,16 @@ private struct SourceSummaryGroupView: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentMaterialSurface(cornerRadius: 16)
+    }
+
+    private var fallbackProgressMetric: UsageProgressMetric {
+        UsageProgressMetric(
+            label: model.progressLabel,
+            quotaText: model.progressPrefix,
+            usedPercent: model.progress.map { $0 * 100 },
+            totalQuota: nil,
+            usedQuota: nil
+        )
     }
 
     @ViewBuilder
@@ -2691,16 +2862,15 @@ private struct LiquidGlassSummaryPanel: View {
             Spacer(minLength: 6)
 
             HStack(spacing: 6) {
-                Text(model.statusText)
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(model.statusTone.swiftUIColor)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 4.5)
-                    .background(model.statusTone.swiftUIFillColor)
-                    .overlay {
-                        Capsule().stroke(model.statusTone.swiftUIBorderColor, lineWidth: 0.8)
-                    }
-                    .clipShape(Capsule())
+                StatusIndicatorView(
+                    text: model.statusText,
+                    color: model.statusTone.swiftUIColor,
+                    fontSize: 10.5,
+                    horizontalPadding: 9,
+                    verticalPadding: 4.5,
+                    fillColor: model.statusTone.swiftUIFillColor,
+                    borderColor: model.statusTone.swiftUIBorderColor
+                )
 
                 if shouldShowHeaderPanelToggle {
                     Button(action: togglePanelMode) {
@@ -2892,54 +3062,31 @@ private struct LiquidGlassSummaryPanel: View {
     }
 
     private var progressSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text(model.progressLabel)
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                HStack(spacing: 6) {
-                    if let progressPrefix = model.progressPrefix {
-                        Text(progressPrefix)
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.84)
-                    }
-
-                    Text(model.progressValue)
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(.primary)
-                }
+        VStack(alignment: .leading, spacing: 4) {
+            if let dailyProgress = model.dailyProgress {
+                UsageProgressRow(metric: dailyProgress)
             }
-
-            GeometryReader { proxy in
-                let value = model.progress ?? 0
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(.quaternary)
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    .accentColor.opacity(0.72),
-                                    .accentColor.opacity(0.34)
-                                ],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .frame(width: max(10, proxy.size.width * value))
-                }
+            if let weeklyProgress = model.weeklyProgress {
+                UsageProgressRow(metric: weeklyProgress)
             }
-            .frame(height: 8)
+            if model.dailyProgress == nil, model.weeklyProgress == nil {
+                UsageProgressRow(metric: fallbackProgressMetric)
+            }
         }
         .padding(.horizontal, 11)
-        .padding(.vertical, 9)
+        .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentMaterialSurface(cornerRadius: 15)
+    }
+
+    private var fallbackProgressMetric: UsageProgressMetric {
+        UsageProgressMetric(
+            label: model.progressLabel,
+            quotaText: model.progressPrefix,
+            usedPercent: model.progress.map { $0 * 100 },
+            totalQuota: nil,
+            usedQuota: nil
+        )
     }
 
     @ViewBuilder
@@ -4207,19 +4354,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     private func codexAccountSummaries() -> [CodexAccountSummaryViewModel] {
         let activeID = activeCodexAccount?.id
-        return codexAccounts.map { account in
+        return codexAccounts.enumerated().map { index, account in
             let state = codexStates[account.id]
-            return CodexAccountSummaryViewModel(
-                id: account.id,
-                name: account.name,
-                remaining: state?.remaining ?? "--",
-                usage: state?.usage ?? "--",
-                statusText: codexAccountStatusText(state),
-                statusTone: codexAccountStatusTone(state),
-                isActive: account.id == activeID,
-                isLocal: localCodexKey != nil && account.apiKey == localCodexKey
+            return (
+                index: index,
+                summary: CodexAccountSummaryViewModel(
+                    id: account.id,
+                    name: account.name,
+                    remaining: state?.remaining ?? "--",
+                    dailyQuota: state?.dailyProgress?.quotaText ?? "--",
+                    weeklyQuota: state?.weeklyProgress?.quotaText ?? "--",
+                    dailyUsedPercent: state?.dailyProgress?.usedPercent ?? state?.dailyUsedPercent,
+                    weeklyUsedPercent: state?.weeklyProgress?.usedPercent ?? state?.usedPercent,
+                    dailyUsedQuota: state?.dailyProgress?.usedQuota,
+                    dailyTotalQuota: state?.dailyProgress?.totalQuota,
+                    statusText: codexAccountStatusText(state),
+                    statusTone: codexAccountStatusTone(state),
+                    isActive: account.id == activeID,
+                    isLocal: localCodexKey != nil && account.apiKey == localCodexKey
+                )
             )
-        }
+        }.sorted { lhs, rhs in
+            switch (lhs.summary.dailyTotalQuota, rhs.summary.dailyTotalQuota) {
+            case let (left?, right?) where left != right:
+                return left > right
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                return lhs.index < rhs.index
+            }
+        }.map(\.summary)
     }
 
     private func pushCodexAccountStatuses() {
@@ -4320,6 +4486,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         state.email = payload.email
         state.packageItems = payload.packageItems
         state.usedPercent = payload.usedPercent
+        state.dailyUsedPercent = payload.dailyUsedPercent
+        state.dailyProgress = payload.dailyProgress
+        state.weeklyProgress = payload.weeklyProgress
         state.fallbackText = "余: \(payload.remaining)"
         return state
     }
@@ -4335,6 +4504,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         state.progressPrefix = nil
         state.packageItems = []
         state.usedPercent = nil
+        state.dailyUsedPercent = nil
+        state.dailyProgress = nil
+        state.weeklyProgress = nil
         state.email = nil
         state.fallbackText = fallbackText
         return state
@@ -4833,11 +5005,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             throw makeParseError("缺少 remaining_quota 字段")
         }
 
-        let usageRemainingNumber = displayUsagePayload?.remainingQuota ?? remainingNumber
-        let packageRemainingNumber = packageUsagePayload?.remainingQuota ?? remainingNumber
-        let usedPercent = resolveUsedPercentage(usage: displayUsagePayload, remaining: usageRemainingNumber)
-        let usageQuotaPair = resolveUsageQuotaPair(usage: displayUsagePayload, remaining: usageRemainingNumber)
-        let dailyUsagePair = resolveUsageQuotaPair(usage: packageUsagePayload, remaining: packageRemainingNumber)
+        let dailyRemainingNumber = packageUsagePayload?.remainingQuota ?? state.remainingQuota
+        let weeklyRemainingNumber = weeklyUsagePayload?.remainingQuota
+        let dailyUsedPercent = resolveUsedPercentage(usage: packageUsagePayload, remaining: dailyRemainingNumber)
+        let weeklyUsedPercent = resolveUsedPercentage(usage: weeklyUsagePayload, remaining: weeklyRemainingNumber)
+        let dailyUsagePair = resolveUsageQuotaPair(usage: packageUsagePayload, remaining: dailyRemainingNumber)
+        let weeklyUsagePair = resolveUsageQuotaPair(usage: weeklyUsagePayload, remaining: weeklyRemainingNumber)
+        let usedPercent = weeklyUsedPercent ?? dailyUsedPercent
+        let usageQuotaPair = weeklyUsagePair ?? dailyUsagePair
 
         let usage: String
         if let dailyUsagePair {
@@ -4858,8 +5033,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             renewal: resolveRenewalText(package: state.package),
             packageItems: buildPackageSummaryItems(package: state.package),
             usedPercent: usedPercent,
+            dailyUsedPercent: dailyUsedPercent,
+            dailyProgress: packageUsagePayload.map { _ in
+                UsageProgressMetric(
+                    label: "每日",
+                    quotaText: dailyUsagePair.map { "\($0.used)/\($0.total)" },
+                    usedPercent: dailyUsedPercent,
+                    totalQuota: packageUsagePayload?.totalQuota?.doubleValue,
+                    usedQuota: resolveUsedQuota(usage: packageUsagePayload, remaining: dailyRemainingNumber)
+                )
+            },
+            weeklyProgress: weeklyUsagePayload.map { _ in
+                UsageProgressMetric(
+                    label: "本周",
+                    quotaText: weeklyUsagePair.map { "\($0.used)/\($0.total)" },
+                    usedPercent: weeklyUsedPercent,
+                    totalQuota: weeklyUsagePayload?.totalQuota?.doubleValue,
+                    usedQuota: resolveUsedQuota(usage: weeklyUsagePayload, remaining: weeklyRemainingNumber)
+                )
+            },
             usageLabel: "已用/总",
-            progressLabel: weeklyUsagePayload == nil ? "用量进度" : "本周用量进度",
+            progressLabel: weeklyUsagePayload == nil ? "每日用量进度" : "本周用量进度",
             progressPrefix: usageQuotaPair.map { "\($0.used)/\($0.total)" },
             email: state.user?.email
         )
@@ -4885,6 +5079,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let usedNumber = payload.summary?.usedByte ?? displayPackage?.byteUsed
 
         let usedPercent = resolveUsedPercentage(total: totalNumber, used: usedNumber, remaining: remainingNumber)
+        let totalUsagePair = resolveUsageQuotaPair(total: totalNumber, used: usedNumber, remaining: remainingNumber)
         let usedValue = usedNumber?.doubleValue.map(formatQuotaValue)
         let usage: String
         if let usedValue {
@@ -4901,9 +5096,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             renewal: resolveAGIRenewalText(summary: payload.summary, packages: payload.packages),
             packageItems: buildAGIPackageSummaryItems(packages: payload.packages, summary: payload.summary),
             usedPercent: usedPercent,
+            dailyUsedPercent: nil,
+            dailyProgress: nil,
+            weeklyProgress: UsageProgressMetric(
+                label: "总量",
+                quotaText: totalUsagePair.map { "\($0.used)/\($0.total)" },
+                usedPercent: usedPercent,
+                totalQuota: totalNumber?.doubleValue,
+                usedQuota: usedNumber?.doubleValue
+            ),
             usageLabel: "已用",
             progressLabel: "总用量进度",
-            progressPrefix: nil,
+            progressPrefix: totalUsagePair.map { "\($0.used)/\($0.total)" },
             email: nil
         )
     }
@@ -4979,6 +5183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 progressPrefix: sourceState.progressPrefix,
                 progressValue: progressValue,
                 progress: sourceState.usedPercent.map { max(0, min(100, $0)) / 100 },
+                dailyProgress: sourceState.dailyProgress,
+                weeklyProgress: sourceState.weeklyProgress,
                 footerText: sourceState.message,
                 isExpanded: sourceGroupExpanded[source] ?? true,
                 codexModelConfig: codexConfigViewModel,
@@ -5008,6 +5214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 progressPrefix: activeState.progressPrefix,
                 progressValue: progressValue,
                 progress: activeState.usedPercent.map { max(0, min(100, $0)) / 100 },
+                dailyProgress: activeState.dailyProgress,
+                weeklyProgress: activeState.weeklyProgress,
                 footerText: activeState.message,
                 codexAccountsStatusText: codexAccountsStatusText(),
                 agiAPIKeyStatusText: apiKeyStatusText(for: .agi),
@@ -5223,23 +5431,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return image
     }
 
-    nonisolated private static func resolveUsedPercentage(usage: UsagePayload?, remaining: FlexibleNumber) -> Double? {
+    nonisolated private static func resolveUsedPercentage(usage: UsagePayload?, remaining: FlexibleNumber?) -> Double? {
         if let fromAPI = usage?.usedPercentage?.doubleValue {
-            return fromAPI
+            return max(0, min(100, fromAPI))
         }
         guard
             let totalQuota = usage?.totalQuota?.doubleValue,
             totalQuota > 0,
-            let remainingQuota = remaining.doubleValue
+            let remainingQuota = remaining?.doubleValue
         else {
             return nil
         }
-        return (1 - (remainingQuota / totalQuota)) * 100
+        return max(0, min(100, (1 - (remainingQuota / totalQuota)) * 100))
     }
 
     nonisolated private static func resolveUsageQuotaPair(
         usage: UsagePayload?,
-        remaining: FlexibleNumber
+        remaining: FlexibleNumber?
     ) -> (used: String, total: String)? {
         guard let usedQuota = resolveUsedQuota(usage: usage, remaining: remaining),
               let totalQuota = usage?.totalQuota?.doubleValue else {
@@ -5251,15 +5459,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
     }
 
-    nonisolated private static func resolveUsedQuota(usage: UsagePayload?, remaining: FlexibleNumber) -> Double? {
+    nonisolated private static func resolveUsedQuota(usage: UsagePayload?, remaining: FlexibleNumber?) -> Double? {
         guard
             let totalQuota = usage?.totalQuota?.doubleValue,
-            totalQuota > 0,
-            let remainingQuota = remaining.doubleValue
+            totalQuota > 0
         else {
             return nil
         }
-        return max(0, totalQuota - remainingQuota)
+
+        if let remainingQuota = remaining?.doubleValue {
+            return max(0, totalQuota - remainingQuota)
+        }
+
+        guard let usedPercentage = usage?.usedPercentage?.doubleValue else { return nil }
+        return max(0, totalQuota * usedPercentage / 100)
     }
 
     nonisolated private static func resolveUsedPercentage(
@@ -5304,7 +5517,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         )
     }
 
-    nonisolated private static func formatQuotaValue(_ value: Double) -> String {
+    nonisolated static func formatQuotaValue(_ value: Double) -> String {
         guard value.isFinite else { return "--" }
         let rounded = value.rounded()
         if abs(value - rounded) < 0.005 {
